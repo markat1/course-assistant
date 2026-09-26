@@ -1,7 +1,10 @@
 from fastapi import FastAPI, HTTPException
-from gateway.models.chat_request import ChatRequest
 
-app = FastAPI(title="Course Assistant Gateway")
+
+from gateway.lifespan import lifespan
+from gateway.models.chat_request import ChatRequest
+    
+app = FastAPI(title="Course Assistant Gateway", lifespan=lifespan)
 
 @app.get("/health")
 async def health_check():
