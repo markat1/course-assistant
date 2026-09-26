@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, Field
 from gateway.models.chat_message import ChatMessage
 
 class ChatRequest(BaseModel):
