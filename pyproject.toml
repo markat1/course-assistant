@@ -1,0 +1,8 @@
+[project]
+name = "course-assistant"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "openai>=3.19.2",
+    "openai-agents>=0.22.3",
+]
