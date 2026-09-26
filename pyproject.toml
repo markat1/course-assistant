@@ -7,6 +7,7 @@ dependencies = [
     "httpx>=0.28.1",
     "openai>=3.19.2",
     "openai-agents>=0.22.3",
+    "prometheus-client>=0.26.0",
     "pydantic>=2.13.5",
     "pydantic-settings>=2.15.0",
     "uvicorn>=0.54.0",
