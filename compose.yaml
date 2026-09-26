@@ -1,0 +1,7 @@
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    ports:
+      - "127.0.0.1:8780:8780"
