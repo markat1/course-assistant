@@ -3,5 +3,7 @@ services:
     build:
       context: .
       dockerfile: gateway/Dockerfile
+    env_file:
+      - .env
     ports:
       - "127.0.0.1:8780:8780"
