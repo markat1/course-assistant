@@ -26,3 +26,9 @@ class Settings(BaseSettings):
         gt=0,
         allow_inf_nan=False
     )
+    kv_usage_limit: float = Field(
+        default=0.90,
+        gt=0,
+        lt=1,
+        allow_inf_nan=False
+    )
