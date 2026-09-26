@@ -4,7 +4,7 @@ from urllib.parse import urljoin
 
 import httpx
 
-from gateway.metrics_parser import parse_worker_metrics
+from gateway.monitoring.parser import parse_worker_metrics
 from gateway.models.worker_state import WorkerState
 
 async def collect_worker_metrics(client: httpx.AsyncClient, worker: WorkerState) -> None:

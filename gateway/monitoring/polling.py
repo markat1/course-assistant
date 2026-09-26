@@ -3,7 +3,7 @@ import logging
 
 import httpx
 
-from gateway.metrics_collector import collect_worker_metrics
+from gateway.monitoring.collector import collect_worker_metrics
 from gateway.models.worker_state import WorkerState
 
 logger = logging.getLogger(__name__)

@@ -8,7 +8,7 @@ from fastapi import FastAPI
 
 from gateway.models.settings import Settings
 from gateway.models.worker_state import WorkerState
-from gateway.metrics_monitor import monitor_worker
+from gateway.monitoring.polling import monitor_worker
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
