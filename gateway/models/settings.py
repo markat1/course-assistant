@@ -21,3 +21,8 @@ class Settings(BaseSettings):
         gt=0,
         allow_inf_nan=False
     )
+    metrics_max_age_s: float = Field(
+        default=10.0,
+        gt=0,
+        allow_inf_nan=False
+    )
