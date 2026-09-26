@@ -16,3 +16,8 @@ class Settings(BaseSettings):
         gt=0,
         allow_inf_nan=False
     )
+    metrics_interval_s: float = Field(
+        default=5.0,
+        gt=0,
+        allow_inf_nan=False
+    )
