@@ -1,6 +1,6 @@
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from typing import Literal, Self
-from gateway.models.chat_message import ChatMessage
+from gateway.models.chat.chat_message import ChatMessage
 
 class ChatRequest(BaseModel):
     model_config = ConfigDict(extra="allow", strict=True)

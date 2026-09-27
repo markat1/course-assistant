@@ -1,5 +1,5 @@
 from collections.abc import Iterable
-from gateway.models.worker_state import WorkerState
+from gateway.models.workers.worker_state import WorkerState
 
 def select_worker(workers: Iterable[WorkerState],*,max_metrics_age_s: float) -> WorkerState | None:
     """Select the least-loaded ready worker with fresh, complete metrics."""

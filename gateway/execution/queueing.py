@@ -1,9 +1,9 @@
 import asyncio
 from time import monotonic
 
-from gateway.models.chat_request import ChatRequest
+from gateway.models.chat.chat_request import ChatRequest
 from gateway.models.queued_request import QueuedRequest
-from gateway.models.worker_state import WorkerState
+from gateway.models.workers.worker_state import WorkerState
 
 def enqueue_request(
         queue: asyncio.Queue[QueuedRequest],

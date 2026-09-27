@@ -1,6 +1,6 @@
 from typing import Literal
 from pydantic import BaseModel, Field
-from gateway.models.worker_state import WorkerState
+from gateway.models.workers.worker_state import WorkerState
 
 class AdmissionDecision(BaseModel):
     status_code: Literal[200, 429, 503]

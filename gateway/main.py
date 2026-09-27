@@ -1,8 +1,8 @@
 from fastapi import FastAPI, HTTPException, Request, Response
 from gateway.lifespan import lifespan
-from gateway.models.chat_request import ChatRequest
-from gateway.admission import admit
-from gateway.routing import select_worker
+from gateway.models.chat.chat_request import ChatRequest
+from gateway.policies.admission import admit
+from gateway.policies.routing import select_worker
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from gateway.monitoring.metrics import (
     GATEWAY_REGISTRY,

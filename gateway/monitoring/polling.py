@@ -4,7 +4,7 @@ import logging
 import httpx
 
 from gateway.monitoring.collector import collect_worker_metrics
-from gateway.models.worker_state import WorkerState
+from gateway.models.workers.worker_state import WorkerState
 
 logger = logging.getLogger(__name__)
 

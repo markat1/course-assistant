@@ -1,5 +1,5 @@
 from prometheus_client.parser import text_string_to_metric_families
-from gateway.models.worker_metrics import WorkerMetrics
+from gateway.models.workers.worker_metrics import WorkerMetrics
 
 METRIC_FIELDS = {
     "vllm:num_requests_running": "engine_running",

@@ -1,6 +1,6 @@
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
-from gateway.models.tool_function import ToolFunction
+from gateway.models.chat.tool_function import ToolFunction
 
 class ToolCall(BaseModel):
     model_config = ConfigDict(extra="allow", strict=True)

@@ -7,7 +7,7 @@ import pytest_asyncio
 from prometheus_client.parser import text_string_to_metric_families
 
 from gateway.main import app
-from gateway.models.worker_state import WorkerState
+from gateway.models.workers.worker_state import WorkerState
 
 
 @pytest_asyncio.fixture

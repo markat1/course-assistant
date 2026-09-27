@@ -1,7 +1,7 @@
 from collections.abc import Iterable
 
 from gateway.models.admission_decision import AdmissionDecision
-from gateway.models.worker_state import WorkerState
+from gateway.models.workers.worker_state import WorkerState
 
 def admit(
         workers: Iterable[WorkerState],

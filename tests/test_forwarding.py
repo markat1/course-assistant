@@ -3,9 +3,9 @@ import json
 import httpx
 import pytest
 
-from gateway.forwarding import forward_chat
-from gateway.models.chat_request import ChatRequest
-from gateway.models.worker_state import WorkerState
+from gateway.execution.forwarding import forward_chat
+from gateway.models.chat.chat_request import ChatRequest
+from gateway.models.workers.worker_state import WorkerState
 
 
 @pytest.fixture

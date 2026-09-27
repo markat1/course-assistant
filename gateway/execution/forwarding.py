@@ -1,7 +1,7 @@
 import httpx
 
-from gateway.models.chat_request import ChatRequest
-from gateway.models.worker_state import WorkerState
+from gateway.models.chat.chat_request import ChatRequest
+from gateway.models.workers.worker_state import WorkerState
 
 async def forward_chat(
         client: httpx.AsyncClient,

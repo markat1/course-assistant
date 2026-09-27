@@ -1,6 +1,6 @@
 from typing import Literal, Self
 from pydantic import BaseModel, ConfigDict, JsonValue, model_validator, Field
-from gateway.models.tool_call import ToolCall
+from gateway.models.chat.tool_call import ToolCall
 
 class ChatMessage(BaseModel):
     model_config = ConfigDict(extra="allow", strict=True)

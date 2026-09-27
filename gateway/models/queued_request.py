@@ -2,7 +2,7 @@ from asyncio import Future
 from dataclasses import dataclass
 
 from httpx import Response
-from gateway.models.chat_request import ChatRequest
+from gateway.models.chat.chat_request import ChatRequest
 
 @dataclass
 class QueuedRequest:

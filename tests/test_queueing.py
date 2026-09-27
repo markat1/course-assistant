@@ -1,10 +1,10 @@
 import asyncio
 import pytest
 
-from gateway.models.chat_request import ChatRequest
+from gateway.models.chat.chat_request import ChatRequest
 from gateway.models.queued_request import QueuedRequest
-from gateway.models.worker_state import WorkerState
-from gateway.queueing import enqueue_request
+from gateway.models.workers.worker_state import WorkerState
+from gateway.execution.queueing import enqueue_request
 
 @pytest.fixture
 def queue_setup():
@@ -22,7 +22,7 @@ def queue_setup():
 @pytest.mark.asyncio
 async def test_enqueue_tracks_depth_and_deadline(queue_setup, monkeypatch):
     queue, worker, payload = queue_setup
-    monkeypatch.setattr("gateway.queueing.monotonic", lambda: 100.0)
+    monkeypatch.setattr("gateway.execution.queueing.monotonic", lambda: 100.0)
 
     pending = enqueue_request(queue, worker, payload, timeout_s=5)
 

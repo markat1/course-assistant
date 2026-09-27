@@ -5,7 +5,7 @@ from urllib.parse import urljoin
 import httpx
 
 from gateway.monitoring.parser import parse_worker_metrics
-from gateway.models.worker_state import WorkerState
+from gateway.models.workers.worker_state import WorkerState
 
 async def collect_worker_metrics(client: httpx.AsyncClient, worker: WorkerState) -> None:
     """Fetch and validate metrics before updating the worker state."""
