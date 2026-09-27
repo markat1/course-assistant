@@ -4,12 +4,15 @@ from gateway.models.chat.chat_request import ChatRequest
 from gateway.policies.admission import admit
 from gateway.policies.routing import select_worker
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from gateway.api.chat import serve_queued_chat
+
 from gateway.monitoring.metrics import (
     GATEWAY_REGISTRY,
     REQUEST_TOTAL,
     SHED_TOTAL,
     PLACE_TOTAL
 )
+
 
 app = FastAPI(title="Course Assistant Gateway", lifespan=lifespan)
 
@@ -80,7 +83,9 @@ async def chat_completions(chat_request: ChatRequest, request: Request):
 
     PLACE_TOTAL.labels(worker=worker.id).inc()
 
-    raise HTTPException(
-        status_code=501,
-        detail=f"Forwarding to {worker.id} is not implemented yet."
+    return await serve_queued_chat(
+        chat_request,
+        worker,
+        request.app.state.queues[worker.id],
+        timeout_s=settings.queue_timeout_s
     )

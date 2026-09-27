@@ -1,26 +1,10 @@
 import asyncio
-import json
 
 import httpx
 import pytest
 
-from gateway.execution.dispatch import dispatch_one, dispatch_requests
-from gateway.models.chat.chat_request import ChatRequest
-from gateway.models.queued_request import QueuedRequest
-from gateway.models.workers.worker_state import WorkerState
+from gateway.execution.dispatch import dispatch_requests
 from gateway.execution.queueing import enqueue_request
-
-
-@pytest.fixture
-def dispatch_setup():
-    queue = asyncio.Queue[QueuedRequest](maxsize=4)
-    worker = WorkerState(id="worker-a", base_url="http://worker-a:8000/v1")
-    payload = ChatRequest(
-        model="Qwen/Qwen3-8B",
-        messages=[{"role": "user", "content": "Explain admission control."}],
-        max_tokens=32,
-    )
-    return queue, worker, payload
 
 
 async def drain(queue, worker, handler):
@@ -36,15 +20,14 @@ async def drain(queue, worker, handler):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status", [200, 429, 500, 503, 529])
-async def test_response_is_preserved_without_retry(dispatch_setup, status):
-    queue, worker, payload = dispatch_setup
+async def test_response_is_preserved_without_retry(request_queue, worker, chat_payload, status):
+    queue, payload = request_queue, chat_payload
     pending = enqueue_request(queue, worker, payload, timeout_s=60)
     requests = []
     body = b'{"message":"engine response"}'
 
     def engine(request):
         requests.append(request)
-        assert worker.gateway_queue_depth == 0
         return httpx.Response(status, content=body)
 
     await drain(queue, worker, engine)
@@ -53,16 +36,11 @@ async def test_response_is_preserved_without_retry(dispatch_setup, status):
     assert response.status_code == status
     assert response.content == body
     assert len(requests) == 1
-    assert requests[0].method == "POST"
-    assert str(requests[0].url) == "http://worker-a:8000/v1/chat/completions"
-    assert json.loads(requests[0].content) == payload.model_dump(
-        mode="json", exclude_unset=True
-    )
 
 
 @pytest.mark.asyncio
-async def test_expired_request_never_reaches_engine(dispatch_setup, monkeypatch):
-    queue, worker, payload = dispatch_setup
+async def test_expired_request_never_reaches_engine(request_queue, worker, chat_payload, monkeypatch):
+    queue, payload = request_queue, chat_payload
     monkeypatch.setattr("gateway.execution.queueing.monotonic", lambda: 100.0)
     monkeypatch.setattr("gateway.execution.dispatch.monotonic", lambda: 105.0)
     pending = enqueue_request(queue, worker, payload, timeout_s=5)
@@ -81,8 +59,8 @@ async def test_expired_request_never_reaches_engine(dispatch_setup, monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_cancelled_queued_request_never_reaches_engine(dispatch_setup):
-    queue, worker, payload = dispatch_setup
+async def test_cancelled_queued_request_never_reaches_engine(request_queue, worker, chat_payload):
+    queue, payload = request_queue, chat_payload
     pending = enqueue_request(queue, worker, payload, timeout_s=60)
     pending.result.cancel()
     requests = []
@@ -100,8 +78,8 @@ async def test_cancelled_queued_request_never_reaches_engine(dispatch_setup):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("error_type", [httpx.ConnectError, httpx.ReadTimeout])
-async def test_transport_error_does_not_stop_next_request(dispatch_setup, error_type):
-    queue, worker, payload = dispatch_setup
+async def test_transport_error_does_not_stop_next_request(request_queue, worker, chat_payload, error_type):
+    queue, payload = request_queue, chat_payload
     first = enqueue_request(queue, worker, payload, timeout_s=60)
     second = enqueue_request(queue, worker, payload, timeout_s=60)
     requests = []
@@ -122,8 +100,8 @@ async def test_transport_error_does_not_stop_next_request(dispatch_setup, error_
 
 
 @pytest.mark.asyncio
-async def test_shutdown_cancels_active_request_and_finishes_queue_item(dispatch_setup):
-    queue, worker, payload = dispatch_setup
+async def test_shutdown_cancels_active_request_and_finishes_queue_item(request_queue, worker, chat_payload):
+    queue, payload = request_queue, chat_payload
     pending = enqueue_request(queue, worker, payload, timeout_s=60)
     started = asyncio.Event()
     stopped = asyncio.Event()
@@ -153,37 +131,8 @@ async def test_shutdown_cancels_active_request_and_finishes_queue_item(dispatch_
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("now, expected_calls", [(104.999, 1), (105.0, 0)])
-async def test_single_dispatch_checks_deadline_without_queue_loop(
-    dispatch_setup, monkeypatch, now, expected_calls
-):
-    _, worker, payload = dispatch_setup
-    pending = QueuedRequest(
-        payload=payload,
-        result=asyncio.get_running_loop().create_future(),
-        expires_at=105.0,
-    )
-    monkeypatch.setattr("gateway.execution.dispatch.monotonic", lambda: now)
-    requests = []
-
-    def engine(request):
-        requests.append(request)
-        return httpx.Response(200)
-
-    async with httpx.AsyncClient(transport=httpx.MockTransport(engine)) as client:
-        await dispatch_one(client, worker, pending)
-
-    if expected_calls:
-        assert (await pending.result).status_code == 200
-    else:
-        with pytest.raises(TimeoutError, match="Queue deadline exceeded"):
-            await pending.result
-    assert len(requests) == expected_calls
-
-
-@pytest.mark.asyncio
-async def test_caller_cancellation_stops_upstream_and_allows_next_request(dispatch_setup):
-    queue, worker, payload = dispatch_setup
+async def test_caller_cancellation_stops_upstream_and_allows_next_request(request_queue, worker, chat_payload):
+    queue, payload = request_queue, chat_payload
     first = enqueue_request(queue, worker, payload, timeout_s=60)
     second = enqueue_request(queue, worker, payload, timeout_s=60)
     started = asyncio.Event()

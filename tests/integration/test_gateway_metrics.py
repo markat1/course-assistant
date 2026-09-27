@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 from time import monotonic
 
@@ -5,6 +6,7 @@ import httpx
 import pytest
 import pytest_asyncio
 from prometheus_client.parser import text_string_to_metric_families
+from fastapi.responses import JSONResponse
 
 from gateway.main import app
 from gateway.models.workers.worker_state import WorkerState
@@ -17,9 +19,19 @@ async def client(monkeypatch):
     monkeypatch.setattr(
         app.state,
         "settings",
-        SimpleNamespace(metrics_max_age_s=10.0, kv_usage_limit=0.9),
+        SimpleNamespace(metrics_max_age_s=10.0, kv_usage_limit=0.9, queue_timeout_s=5),
         raising=False,
     )
+    monkeypatch.setattr(
+        app.state, "queues", {name: asyncio.Queue() for name in ("worker-a", "worker-b")},
+        raising=False,
+    )
+
+    # Isolate counter behavior here; test_chat_api covers real queue/dispatch execution.
+    async def completed_chat(payload, worker, queue, *, timeout_s):
+        return JSONResponse({"worker": worker.id})
+
+    monkeypatch.setattr("gateway.main.serve_queued_chat", completed_chat)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://gateway"
     ) as session:
@@ -125,8 +137,8 @@ async def test_admission_rejection_increments_only_its_shed_series(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status", [422, 501])
-async def test_validation_and_forwarding_placeholder_do_not_count_as_shedding(client, status):
+@pytest.mark.parametrize("status", [422, 200])
+async def test_validation_and_success_do_not_count_as_shedding(client, status):
     worker = ready_worker(0.25)
     app.state.workers = {worker.id: worker}
     before = await shed_counts(client)
@@ -191,10 +203,8 @@ async def test_placement_counts_follow_worker_selection_before_dispatch(client):
     for selected in (worker_b, worker_a):
         response = await client.post("/v1/chat/completions", json=payload)
 
-        assert response.status_code == 501
-        assert response.json() == {
-            "detail": f"Forwarding to {selected.id} is not implemented yet."
-        }
+        assert response.status_code == 200
+        assert response.json() == {"worker": selected.id}
         expected[selected.id] = expected.get(selected.id, 0) + 1
         assert await placement_counts(client) == expected
         worker_b.ready = False

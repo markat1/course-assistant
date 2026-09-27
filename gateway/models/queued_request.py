@@ -10,3 +10,4 @@ class QueuedRequest:
     payload: ChatRequest
     result: Future[Response]
     expires_at: float
+    started_at: float | None = None

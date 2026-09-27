@@ -33,11 +33,16 @@ async def dispatch_one(
     if pending.result.done():
         return
 
-    if monotonic() >= pending.expires_at:
+    now = monotonic()
+
+    if now >= pending.expires_at:
+
         pending.result.set_exception(
             TimeoutError("Queue deadline exceeded")
         )
         return
+
+    pending.started_at = now
 
     try:
         await forward_until_done(client, worker, pending)

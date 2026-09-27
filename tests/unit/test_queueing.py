@@ -1,27 +1,15 @@
 import asyncio
 import pytest
 
-from gateway.models.chat.chat_request import ChatRequest
-from gateway.models.queued_request import QueuedRequest
-from gateway.models.workers.worker_state import WorkerState
 from gateway.execution.queueing import enqueue_request
 
 @pytest.fixture
-def queue_setup():
-    queue = asyncio.Queue[QueuedRequest](maxsize=1)
-    worker = WorkerState(
-        id="worker-a",
-        base_url="http://worker-a:8000/v1",
-    )
-    payload = ChatRequest(
-        model="Qwen/Qwen3-8B",
-        messages=[{"role": "user", "content": "Explain admission control."}]
-    )
-    return queue, worker, payload
+def request_queue():
+    return asyncio.Queue(maxsize=1)
 
 @pytest.mark.asyncio
-async def test_enqueue_tracks_depth_and_deadline(queue_setup, monkeypatch):
-    queue, worker, payload = queue_setup
+async def test_enqueue_tracks_depth_and_deadline(request_queue, worker, chat_payload, monkeypatch):
+    queue, payload = request_queue, chat_payload
     monkeypatch.setattr("gateway.execution.queueing.monotonic", lambda: 100.0)
 
     pending = enqueue_request(queue, worker, payload, timeout_s=5)
@@ -36,8 +24,8 @@ async def test_enqueue_tracks_depth_and_deadline(queue_setup, monkeypatch):
     pending.result.cancel()
 
 @pytest.mark.asyncio
-async def test_full_queue_preserves_existing_request(queue_setup):
-    queue, worker, payload = queue_setup
+async def test_full_queue_preserves_existing_request(request_queue, worker, chat_payload):
+    queue, payload = request_queue, chat_payload
     first = enqueue_request(queue, worker, payload, timeout_s=5)
 
     with pytest.raises(asyncio.QueueFull):

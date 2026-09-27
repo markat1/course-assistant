@@ -10,7 +10,7 @@ REQUEST_TOTAL = Counter(
 
 SHED_TOTAL = Counter(
     "orch_shed_total",
-    "Request rejected by gateway admission or worker availability.",
+    "Requests rejected before dispatch by admission, availability or queue limits.",
 
     labelnames=["reason", "code"],
     registry=GATEWAY_REGISTRY
