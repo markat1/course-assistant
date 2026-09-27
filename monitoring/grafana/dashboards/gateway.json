@@ -53,6 +53,51 @@
         },
         "overrides": []
       }
-    }
+    },
+    {
+      "id": 2,
+      "title": "Rejected requests since gateway start",
+      "description": "Gateway admission and worker-availability rejections, grouped by reason and HTTP status. Resets when the gateway process restarts.",
+      "type": "stat",
+      "gridPos": {
+        "x": 8,
+        "y": 0,
+        "w": 8,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "orch_shed_total{job=\"gateway\"}",
+          "legendFormat": "{{reason}} (HTTP {{code}})",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "orange"
+          }
+        },
+        "overrides": []
+      }
+  }
   ]
 }
