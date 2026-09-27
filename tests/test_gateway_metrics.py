@@ -108,6 +108,7 @@ async def test_admission_rejection_increments_only_its_shed_series(
         worker = ready_worker(kv_usage)
         app.state.workers = {worker.id: worker}
     before = await shed_counts(client)
+    placements_before = await placement_counts(client)
 
     response = await client.post(
         "/v1/chat/completions",
@@ -120,6 +121,7 @@ async def test_admission_rejection_increments_only_its_shed_series(
     key = (reason, str(status))
     expected[key] = before.get(key, 0) + 1
     assert await shed_counts(client) == expected
+    assert await placement_counts(client) == placements_before
 
 
 @pytest.mark.asyncio
@@ -144,6 +146,7 @@ async def test_no_worker_after_admission_counts_one_availability_rejection(clien
     app.state.workers = {worker.id: worker}
     monkeypatch.setattr("gateway.main.select_worker", lambda *args, **kwargs: None)
     before = await shed_counts(client)
+    placements_before = await placement_counts(client)
 
     response = await client.post(
         "/v1/chat/completions",
@@ -156,3 +159,54 @@ async def test_no_worker_after_admission_counts_one_availability_rejection(clien
     key = ("no_eligible_workers", "503")
     expected[key] = before.get(key, 0) + 1
     assert await shed_counts(client) == expected
+    assert await placement_counts(client) == placements_before
+
+
+async def placement_counts(client):
+    response = await client.get("/metrics")
+    assert response.status_code == 200
+    return {
+        sample.labels["worker"]: sample.value
+        for family in text_string_to_metric_families(response.text)
+        for sample in family.samples
+        if sample.name == "orch_place_total"
+    }
+
+
+@pytest.mark.asyncio
+async def test_placement_counts_follow_worker_selection_before_dispatch(client):
+    worker_a = ready_worker(0.25)
+    worker_a.gateway_queue_depth = 5
+    worker_b = ready_worker(0.25)
+    worker_b.id = "worker-b"
+    worker_b.base_url = "http://worker-b:8000/v1"
+    worker_b.engine_running = 2
+    app.state.workers = {worker_a.id: worker_a, worker_b.id: worker_b}
+    expected = await placement_counts(client)
+    payload = {
+        "model": "Qwen/Qwen3-8B",
+        "messages": [{"role": "user", "content": "Hello"}],
+    }
+
+    for selected in (worker_b, worker_a):
+        response = await client.post("/v1/chat/completions", json=payload)
+
+        assert response.status_code == 501
+        assert response.json() == {
+            "detail": f"Forwarding to {selected.id} is not implemented yet."
+        }
+        expected[selected.id] = expected.get(selected.id, 0) + 1
+        assert await placement_counts(client) == expected
+        worker_b.ready = False
+
+
+@pytest.mark.asyncio
+async def test_validation_rejection_does_not_count_worker_selection(client):
+    before = await placement_counts(client)
+
+    response = await client.post(
+        "/v1/chat/completions", json={"model": "Qwen/Qwen3-8B", "messages": []}
+    )
+
+    assert response.status_code == 422
+    assert await placement_counts(client) == before

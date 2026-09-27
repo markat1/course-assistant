@@ -15,3 +15,10 @@ SHED_TOTAL = Counter(
     labelnames=["reason", "code"],
     registry=GATEWAY_REGISTRY
 )
+
+PLACE_TOTAL = Counter(
+    "orch_place_total",
+    "Worker selections made by the gateway before dispatch.",
+    labelnames=["worker"],
+    registry=GATEWAY_REGISTRY
+)

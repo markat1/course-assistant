@@ -7,7 +7,8 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from gateway.monitoring.metrics import (
     GATEWAY_REGISTRY,
     REQUEST_TOTAL,
-    SHED_TOTAL
+    SHED_TOTAL,
+    PLACE_TOTAL
 )
 
 app = FastAPI(title="Course Assistant Gateway", lifespan=lifespan)
@@ -76,6 +77,8 @@ async def chat_completions(chat_request: ChatRequest, request: Request):
         ).inc()
 
         raise HTTPException(status_code=503,detail="no_eligible_workers")
+
+    PLACE_TOTAL.labels(worker=worker.id).inc()
 
     raise HTTPException(
         status_code=501,
