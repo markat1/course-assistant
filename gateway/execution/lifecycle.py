@@ -20,7 +20,7 @@ def start_worker_tasks(
     """Start monitoring and bounded dispatch consumers for one worker."""
 
     monitor = group.create_task(
-        monitor_worker(client, worker, settings.metrics_interval_s),
+        monitor_worker(client, worker, settings),
         name=f"monitor_{worker.id}"
     )
 

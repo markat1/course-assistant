@@ -43,8 +43,8 @@ async def test_consumers_reach_configured_concurrency_without_exceeding_it(
     monitor_calls = []
     active = peak = calls = 0
 
-    async def monitor(client, monitored_worker, interval):
-        monitor_calls.append((client, monitored_worker, interval))
+    async def monitor(client, monitored_worker, monitor_settings):
+        monitor_calls.append((client, monitored_worker, monitor_settings))
         try:
             await asyncio.Event().wait()
         finally:
@@ -83,10 +83,9 @@ async def test_consumers_reach_configured_concurrency_without_exceeding_it(
     assert calls == concurrency + 1
     assert active == 0
     assert worker.gateway_queue_depth == 0
-    assert monitor_calls == [(client, worker, settings.metrics_interval_s)]
+    assert monitor_calls == [(client, worker, settings)]
     assert monitor_stopped.is_set()
     assert all(task.done() for task in tasks)
     for item in pending:
         assert (await item.result).status_code == 200
-
 
