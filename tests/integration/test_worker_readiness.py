@@ -23,9 +23,9 @@ def engine_responses():
         ("GET", "/metrics"): httpx.Response(
             200,
             text=(
-                "vllm:num_requests_running 0\n"
-                "vllm:num_requests_waiting 0\n"
-                "vllm:kv_cache_usage_perc 0.1\n"
+                "sglang:num_running_reqs 0\n"
+                "sglang:num_queue_reqs 0\n"
+                "sglang:full_token_usage 0.1\n"
             ),
         ),
     }
@@ -102,7 +102,7 @@ async def test_http_failure_stops_preparation_and_clears_readiness(
 @pytest.mark.parametrize("endpoint,body", [
     pytest.param(("GET", "/v1/models"), b'{"data": []}', id="missing-model"),
     pytest.param(("POST", "/v1/chat/completions"), b'{"choices": []}', id="invalid-warmup"),
-    pytest.param(("GET", "/metrics"), b"vllm:num_requests_running 0\n", id="incomplete-metrics"),
+    pytest.param(("GET", "/metrics"), b"sglang:num_running_reqs 0\n", id="incomplete-metrics"),
 ])
 async def test_invalid_engine_data_cannot_restore_readiness(
     worker, chat_payload, engine_responses, endpoint, body
@@ -259,9 +259,9 @@ async def test_prepared_worker_under_kv_pressure_is_rejected_by_admission(
     worker, chat_payload, engine_responses
 ):
     engine_responses["GET", "/metrics"] = httpx.Response(200, text=(
-        "vllm:num_requests_running 1\n"
-        "vllm:num_requests_waiting 0\n"
-        "vllm:kv_cache_usage_perc 0.95\n"
+        "sglang:num_running_reqs 1\n"
+        "sglang:num_queue_reqs 0\n"
+        "sglang:full_token_usage 0.95\n"
     ))
 
     def engine(request):

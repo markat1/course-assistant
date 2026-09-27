@@ -1,0 +1,8 @@
+# Synthetic fixture, not a captured GPU scrape.
+# Names/semantics: https://github.com/sgl-project/sglang/blob/v0.5.20/python/sglang/srt/observability/metrics_collector.py
+# One series per selected metric; full_token_usage is the full-attention pool.
+sglang:num_running_reqs{model_name="test-model"} 2
+sglang:num_queue_reqs{model_name="test-model"} 3
+sglang:full_token_usage{model_name="test-model"} 0.25
+sglang:token_usage{model_name="test-model"} 0.9
+sglang:gen_throughput{model_name="test-model"} 100

@@ -47,9 +47,9 @@ async def test_monitor_clears_readiness_and_repeats_preparation_after_failure(
             })
         if request.url.path == "/metrics":
             return httpx.Response(200, text=(
-                "vllm:num_requests_running 0\n"
-                "vllm:num_requests_waiting 0\n"
-                "vllm:kv_cache_usage_perc 0.1\n"
+                "sglang:num_running_reqs 0\n"
+                "sglang:num_queue_reqs 0\n"
+                "sglang:full_token_usage 0.1\n"
             ))
         pytest.fail(f"Unexpected request: {request.url}")
 

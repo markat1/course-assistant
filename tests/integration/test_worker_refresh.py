@@ -38,9 +38,9 @@ async def test_refresh_prepares_worker_once_then_updates_metrics(worker):
         if request.url.path == "/metrics":
             scrapes += 1
             return httpx.Response(200, text=(
-                f"vllm:num_requests_running {scrapes}\n"
-                "vllm:num_requests_waiting 0\n"
-                "vllm:kv_cache_usage_perc 0.1\n"
+                f"sglang:num_running_reqs {scrapes}\n"
+                "sglang:num_queue_reqs 0\n"
+                "sglang:full_token_usage 0.1\n"
             ))
         pytest.fail(f"Unexpected engine request: {request.url}")
 

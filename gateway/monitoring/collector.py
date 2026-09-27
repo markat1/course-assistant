@@ -5,6 +5,8 @@ from urllib.parse import urljoin
 import httpx
 
 from gateway.monitoring.parser import parse_worker_metrics
+from gateway.monitoring.sglang import SGLANG_METRIC_FIELDS
+
 from gateway.models.workers.worker_state import WorkerState
 
 async def collect_worker_metrics(client: httpx.AsyncClient, worker: WorkerState) -> None:
@@ -16,7 +18,7 @@ async def collect_worker_metrics(client: httpx.AsyncClient, worker: WorkerState)
     async with asyncio.timeout(2.0):
         response = await client.get(url)
         response.raise_for_status()
-        metrics = parse_worker_metrics(response.text)
+        metrics = parse_worker_metrics(response.text, fields=SGLANG_METRIC_FIELDS)
 
     worker.engine_running = metrics.engine_running
     worker.engine_waiting = metrics.engine_waiting
