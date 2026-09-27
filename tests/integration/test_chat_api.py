@@ -36,6 +36,7 @@ def serving(monkeypatch):
         queue = asyncio.Queue(maxsize=1)
         settings = SimpleNamespace(
             metrics_max_age_s=10, kv_usage_limit=0.9, queue_timeout_s=timeout_s,
+            capacity_retry_after_s=7,
         )
         monkeypatch.setattr(app.state, "workers", {worker.id: worker}, raising=False)
         monkeypatch.setattr(app.state, "queues", {worker.id: queue}, raising=False)
@@ -129,6 +130,7 @@ async def test_full_queue_returns_503_and_preserves_existing_request(serving):
         response = await service.client.post(CHAT_URL, json=PAYLOAD)
         assert response.status_code == 503
         assert response.json() == {"detail": "queue_full"}
+        assert response.headers["retry-after"] == "7"
         assert service.queue.qsize() == 1
         assert not existing.result.done()
         assert requests == []
@@ -148,6 +150,7 @@ async def test_queue_deadline_returns_504_without_worker_call(serving):
         response = await asyncio.wait_for(service.client.post(CHAT_URL, json=PAYLOAD), timeout=1)
         assert response.status_code == 504
         assert response.json() == {"detail": "timeout_queue"}
+        assert "retry-after" not in response.headers
         assert requests == []
         assert await counters(service.client) == expected_counters(before, reason="timeout_queue", code=504)
 
@@ -174,6 +177,7 @@ async def test_upstream_transport_error_is_not_shedding_and_next_request_succeed
         response = await service.client.post(CHAT_URL, json=PAYLOAD)
         assert response.status_code == status
         assert response.json() == {"detail": detail}
+        assert "retry-after" not in response.headers
         assert await counters(service.client) == expected_counters(before)
         response = await service.client.post(CHAT_URL, json=PAYLOAD)
         assert response.status_code == 200
@@ -201,6 +205,7 @@ async def test_unexpected_dispatch_error_returns_500_and_next_request_succeeds(
         )
         assert response.status_code == 500
         assert response.json() == {"detail": "dispatch_failed"}
+        assert "retry-after" not in response.headers
         assert await counters(service.client) == expected_counters(before)
         assert not service.task.done()
 

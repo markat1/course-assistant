@@ -1,15 +1,14 @@
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, Request, Response
 from gateway.lifespan import lifespan
 from gateway.models.chat.chat_request import ChatRequest
 from gateway.policies.admission import admit
 from gateway.policies.routing import select_worker
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
-from gateway.api.chat import serve_queued_chat
+from gateway.api.chat import reject_before_dispatch, serve_queued_chat
 
 from gateway.monitoring.metrics import (
     GATEWAY_REGISTRY,
     REQUEST_TOTAL,
-    SHED_TOTAL,
     PLACE_TOTAL
 )
 
@@ -58,15 +57,12 @@ async def chat_completions(chat_request: ChatRequest, request: Request):
     )
 
     if decision.status_code != 200:
-        SHED_TOTAL.labels(
-            reason=decision.reason,
-            code=str(decision.status_code)
-        ).inc()
-
-        raise HTTPException(
-            status_code=decision.status_code,
-            detail=decision.reason
+        reject_before_dispatch(
+            decision.reason,
+            decision.status_code,
+            retry_after_s=settings.capacity_retry_after_s,
         )
+
 
     worker = select_worker(
         decision.workers,
@@ -74,12 +70,11 @@ async def chat_completions(chat_request: ChatRequest, request: Request):
     )
 
     if worker is None:
-        SHED_TOTAL.labels(
-            reason="no_eligible_workers",
-            code="503"
-        ).inc()
-
-        raise HTTPException(status_code=503,detail="no_eligible_workers")
+        reject_before_dispatch(
+            "no_eligible_workers",
+            503,
+            retry_after_s=settings.capacity_retry_after_s,
+        )
 
     PLACE_TOTAL.labels(worker=worker.id).inc()
 
@@ -87,5 +82,6 @@ async def chat_completions(chat_request: ChatRequest, request: Request):
         chat_request,
         worker,
         request.app.state.queues[worker.id],
-        timeout_s=settings.queue_timeout_s
+        timeout_s=settings.queue_timeout_s,
+        capacity_retry_after_s=settings.capacity_retry_after_s,
     )

@@ -12,10 +12,24 @@ from gateway.models.workers.worker_state import WorkerState
 from gateway.monitoring.metrics import SHED_TOTAL
 from gateway.execution.errors import DispatchError
 
-def reject_before_dispatch(reason: str, status_code: int) -> NoReturn:
-    """Record a gateway rejection and return its HTTP error."""
+def reject_before_dispatch(
+    reason: str,
+    status_code: int,
+    *,
+    retry_after_s: int | None = None,
+) -> NoReturn:
+    """Record a rejection and return its optional retry guidance."""
+    headers = {}
+    if retry_after_s is not None:
+        headers["Retry-After"] = str(retry_after_s)
+
     SHED_TOTAL.labels(reason=reason, code=str(status_code)).inc()
-    raise HTTPException(status_code=status_code, detail=reason)
+
+    raise HTTPException(
+        status_code=status_code,
+        detail=reason,
+        headers=headers,
+    )
 
 def to_client_response(upstream: httpx.Response) -> Response:
     """Preserve the upstream body, status and selected response headers."""
@@ -37,6 +51,7 @@ async def serve_queued_chat(
         queue: asyncio.Queue[QueuedRequest],
         *,
         timeout_s: float,
+        capacity_retry_after_s: int,
 ) -> Response:
     """Enqueue a selected request and translate its outcome to HTTP."""
     try:
@@ -50,7 +65,7 @@ async def serve_queued_chat(
         upstream = await wait_for_response(pending)
 
     except asyncio.QueueFull:
-        reject_before_dispatch("queue_full", 503)
+        reject_before_dispatch("queue_full", 503, retry_after_s=capacity_retry_after_s)
     except TimeoutError:
         reject_before_dispatch("timeout_queue", 504)
     except httpx.TimeoutException as exc:

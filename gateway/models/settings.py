@@ -43,6 +43,7 @@ class Settings(BaseSettings):
         gt=0,
         allow_inf_nan=False
     )
+    capacity_retry_after_s: int = Field(default=2, gt=0)
     warmup_prompt: str = Field(
         default=(
             "Course context: A KV cache stores attention keys and values "

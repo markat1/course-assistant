@@ -19,7 +19,10 @@ async def client(monkeypatch):
     monkeypatch.setattr(
         app.state,
         "settings",
-        SimpleNamespace(metrics_max_age_s=10.0, kv_usage_limit=0.9, queue_timeout_s=5),
+        SimpleNamespace(
+            metrics_max_age_s=10.0, kv_usage_limit=0.9,
+            queue_timeout_s=5, capacity_retry_after_s=7,
+        ),
         raising=False,
     )
     monkeypatch.setattr(
@@ -28,7 +31,7 @@ async def client(monkeypatch):
     )
 
     # Isolate counter behavior here; test_chat_api covers real queue/dispatch execution.
-    async def completed_chat(payload, worker, queue, *, timeout_s):
+    async def completed_chat(payload, worker, queue, *, timeout_s, capacity_retry_after_s):
         return JSONResponse({"worker": worker.id})
 
     monkeypatch.setattr("gateway.main.serve_queued_chat", completed_chat)
@@ -129,6 +132,7 @@ async def test_admission_rejection_increments_only_its_shed_series(
 
     assert response.status_code == status
     assert response.json() == {"detail": reason}
+    assert response.headers["retry-after"] == "7"
     expected = dict(before)
     key = (reason, str(status))
     expected[key] = before.get(key, 0) + 1
@@ -167,6 +171,7 @@ async def test_no_worker_after_admission_counts_one_availability_rejection(clien
 
     assert response.status_code == 503
     assert response.json() == {"detail": "no_eligible_workers"}
+    assert response.headers["retry-after"] == "7"
     expected = dict(before)
     key = ("no_eligible_workers", "503")
     expected[key] = before.get(key, 0) + 1
