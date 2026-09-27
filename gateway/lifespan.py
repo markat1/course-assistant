@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from gateway.models.settings import Settings
 from gateway.models.worker_state import WorkerState
 from gateway.monitoring.polling import monitor_worker
+from gateway.models.queued_request import QueuedRequest
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
@@ -22,6 +23,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     }
 
     app.state.workers = workers
+    app.state.queues = {
+        worker_id: asyncio.Queue[QueuedRequest](maxsize=settings.queue_max_size) for worker_id in workers
+    }
 
     async with httpx.AsyncClient(timeout=settings.upstream_timeout_s, trust_env=False) as client:
         app.state.client = client

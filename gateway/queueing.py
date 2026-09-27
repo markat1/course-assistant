@@ -14,7 +14,7 @@ def enqueue_request(
     """Enqueue immediately or raise QueueFull when capacity is exhausted"""
     pending = QueuedRequest(
         payload=payload,
-        result=asyncio.get_event_loop().create_future(),
+        result=asyncio.get_running_loop().create_future(),
         expires_at=monotonic() + timeout_s,
     )
 
