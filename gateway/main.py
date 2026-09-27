@@ -1,10 +1,31 @@
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from gateway.lifespan import lifespan
 from gateway.models.chat_request import ChatRequest
 from gateway.admission import admit
 from gateway.routing import select_worker
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from gateway.monitoring.metrics import GATEWAY_REGISTRY, REQUEST_TOTAL
 
 app = FastAPI(title="Course Assistant Gateway", lifespan=lifespan)
+
+@app.middleware("http")
+async def count_chat_requests(request: Request, call_next):
+    """Count incoming chat request before request validation."""
+    if(
+        request.method == "POST"
+        and request.url.path == "/v1/chat/completions"
+    ):
+        REQUEST_TOTAL.inc()
+
+    return await call_next(request)
+
+@app.get("/metrics", include_in_schema=False)
+async def metrics() -> Response:
+    """Expose gateway metrics in Prometheus format."""
+    return Response(
+        content=generate_latest(GATEWAY_REGISTRY),
+        headers={"Content-type": CONTENT_TYPE_LATEST}
+    )
 
 @app.get("/health")
 async def health_check():
