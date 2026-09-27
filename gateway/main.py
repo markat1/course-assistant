@@ -4,7 +4,11 @@ from gateway.models.chat_request import ChatRequest
 from gateway.admission import admit
 from gateway.routing import select_worker
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
-from gateway.monitoring.metrics import GATEWAY_REGISTRY, REQUEST_TOTAL
+from gateway.monitoring.metrics import (
+    GATEWAY_REGISTRY,
+    REQUEST_TOTAL,
+    SHED_TOTAL
+)
 
 app = FastAPI(title="Course Assistant Gateway", lifespan=lifespan)
 
@@ -50,6 +54,11 @@ async def chat_completions(chat_request: ChatRequest, request: Request):
     )
 
     if decision.status_code != 200:
+        SHED_TOTAL.labels(
+            reason=decision.reason,
+            code=str(decision.status_code)
+        ).inc()
+
         raise HTTPException(
             status_code=decision.status_code,
             detail=decision.reason
@@ -61,6 +70,11 @@ async def chat_completions(chat_request: ChatRequest, request: Request):
     )
 
     if worker is None:
+        SHED_TOTAL.labels(
+            reason="no_eligible_workers",
+            code="503"
+        ).inc()
+
         raise HTTPException(status_code=503,detail="no_eligible_workers")
 
     raise HTTPException(
