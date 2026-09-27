@@ -38,6 +38,7 @@ async def test_lifespan_starts_all_workers_and_cleans_up_before_closing_client(
     settings = make_settings(worker_count)
     started = {worker_id: asyncio.Event() for worker_id in settings.worker_urls}
     events = []
+    logging_levels = []
     client_open_during_cleanup = []
     pending = []
     payload = ChatRequest(
@@ -55,6 +56,7 @@ async def test_lifespan_starts_all_workers_and_cleans_up_before_closing_client(
             client_open_during_cleanup.append(not client.is_closed)
 
     async def monitor(client, worker, interval):
+        assert logging_levels == ["INFO"]
         events.append(("monitor_started", worker.id))
         try:
             await asyncio.Event().wait()
@@ -70,6 +72,9 @@ async def test_lifespan_starts_all_workers_and_cleans_up_before_closing_client(
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(engine))
     monkeypatch.setattr(lifespan_module, "Settings", lambda: settings)
+    monkeypatch.setattr(
+        lifespan_module, "configure_logging", logging_levels.append, raising=False
+    )
     monkeypatch.setattr(
         lifespan_module, "httpx", SimpleNamespace(AsyncClient=lambda **kwargs: client)
     )

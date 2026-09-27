@@ -10,6 +10,7 @@ from gateway.models.settings import Settings
 from gateway.models.workers.worker_state import WorkerState
 from gateway.execution.lifecycle import manage_worker_tasks
 from gateway.models.queued_request import QueuedRequest
+from gateway.monitoring.logging_config import configure_logging
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
@@ -21,6 +22,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.settings = settings
     app.state.workers = workers
     app.state.queues = queues
+
+    configure_logging(settings.log_level)
 
     async with httpx.AsyncClient(
         timeout=settings.upstream_timeout_s,
