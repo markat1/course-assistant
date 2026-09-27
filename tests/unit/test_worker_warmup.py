@@ -3,8 +3,94 @@ import json
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from gateway.monitoring.warmup import warmup_worker
+
+
+@pytest.mark.asyncio
+async def test_warmup_rejects_http_success_without_a_completion(worker, chat_payload):
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"choices": []})
+        )
+    ) as client:
+        with pytest.raises(ValidationError):
+            await warmup_worker(client, worker, chat_payload, timeout_s=1.0)
+
+    assert worker.ready is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", [
+    pytest.param(b"not json", id="invalid-json"),
+    pytest.param(b"[]", id="wrong-root-type"),
+    pytest.param(b"{}", id="missing-choices"),
+    pytest.param(b'{"choices": null}', id="null-choices"),
+    pytest.param(b'{"choices": {}}', id="wrong-choices-type"),
+    pytest.param(b'{"choices": [{}]}', id="missing-message"),
+])
+async def test_warmup_rejects_malformed_completion(worker, chat_payload, body):
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, content=body))
+    ) as client:
+        with pytest.raises(ValidationError):
+            await warmup_worker(client, worker, chat_payload, timeout_s=1.0)
+
+    assert worker.ready is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("message", [
+    pytest.param({"role": "user", "content": "Hello"}, id="wrong-role"),
+    pytest.param({"content": "Hello"}, id="missing-role"),
+    pytest.param({"role": "assistant", "content": ""}, id="empty-text"),
+    pytest.param({"role": "assistant", "content": "   "}, id="blank-text"),
+    pytest.param({"role": "assistant", "content": None}, id="null-without-tools"),
+    pytest.param({"role": "assistant", "content": 42}, id="non-string-text"),
+    pytest.param({"role": "assistant", "tool_calls": [{}]}, id="malformed-tool-call"),
+])
+async def test_warmup_rejects_invalid_assistant_output(worker, chat_payload, message):
+    body = {"choices": [{"message": message}]}
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=body))
+    ) as client:
+        with pytest.raises(ValidationError):
+            await warmup_worker(client, worker, chat_payload, timeout_s=1.0)
+
+    assert worker.ready is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content", [None, ""])
+async def test_warmup_accepts_tool_call_without_text(worker, chat_payload, content):
+    body = {
+        "choices": [{
+            "index": 0,
+            "finish_reason": "tool_calls",
+            "message": {
+                "role": "assistant",
+                "content": content,
+                "tool_calls": [{
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {
+                        "name": "lookup_course",
+                        "arguments": '{"query":"KV cache"}',
+                    },
+                }],
+            },
+        }],
+    }
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=body))
+    ) as client:
+        response = await warmup_worker(client, worker, chat_payload, timeout_s=1.0)
+
+    assert response.json() == body
+    assert worker.ready is False
 
 
 @pytest.mark.asyncio
@@ -35,7 +121,16 @@ async def test_successful_warmup_sends_payload_and_preserves_readiness(
 ):
     worker.ready = ready
     requests = []
-    body = {"choices": [{"message": {"role": "assistant", "content": "Hello"}}]}
+    body = {
+        "id": "chatcmpl-warmup",
+        "model": "test-model",
+        "usage": {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11},
+        "choices": [{
+            "index": 0,
+            "finish_reason": "stop",
+            "message": {"role": "assistant", "content": "Hello"},
+        }],
+    }
 
     def engine(request):
         requests.append(request)
