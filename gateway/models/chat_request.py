@@ -1,5 +1,5 @@
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from typing import Self
+from typing import Literal, Self
 from gateway.models.chat_message import ChatMessage
 
 class ChatRequest(BaseModel):
@@ -7,6 +7,7 @@ class ChatRequest(BaseModel):
 
     model: str = Field(min_length=1, pattern=r"\S")
     messages: list[ChatMessage] = Field(min_length=1)
+    stream: Literal[False] = False
 
     @model_validator(mode="after")
     def validate_tool_sequence(self) -> Self:
