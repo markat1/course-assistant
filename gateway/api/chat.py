@@ -10,6 +10,7 @@ from gateway.models.chat.chat_request import ChatRequest
 from gateway.models.queued_request import QueuedRequest
 from gateway.models.workers.worker_state import WorkerState
 from gateway.monitoring.metrics import SHED_TOTAL
+from gateway.execution.errors import DispatchError
 
 def reject_before_dispatch(reason: str, status_code: int) -> NoReturn:
     """Record a gateway rejection and return its HTTP error."""
@@ -60,6 +61,11 @@ async def serve_queued_chat(
         raise HTTPException(
             status_code=502,
             detail="upstream_unavailable"
+        ) from exc
+    except DispatchError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="dispatch_failed",
         ) from exc
 
     return to_client_response(upstream)

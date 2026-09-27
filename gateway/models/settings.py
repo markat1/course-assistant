@@ -39,3 +39,18 @@ class Settings(BaseSettings):
         gt=0,
         allow_inf_nan=False
     )
+    warmup_prompt: str = Field(
+        default=(
+            "Course context: A KV cache stores attention keys and values "
+            "from previous tokens for reuse during generation. "
+            "Question: Why does KV-cache memory grow during a conversation?"
+        ),
+        min_length=1,
+        pattern=r"\S",
+    )
+    warmup_max_tokens: int = Field(default=128, gt=0)
+    warmup_timeout_s: float = Field(
+        default=20.0,
+        gt=0,
+        allow_inf_nan=False,
+    )

@@ -182,6 +182,44 @@ async def test_upstream_transport_error_is_not_shedding_and_next_request_succeed
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("error_type", [RuntimeError, httpx.InvalidURL, TimeoutError])
+async def test_unexpected_dispatch_error_returns_500_and_next_request_succeeds(
+    serving, caplog, error_type
+):
+    requests = []
+
+    def engine(request):
+        requests.append(request)
+        if len(requests) == 1:
+            raise error_type("internal diagnostic detail")
+        return httpx.Response(200, json={"message": "next request succeeded"})
+
+    async with serving(engine) as service:
+        before = await counters(service.client)
+        response = await asyncio.wait_for(
+            service.client.post(CHAT_URL, json=PAYLOAD), timeout=1
+        )
+        assert response.status_code == 500
+        assert response.json() == {"detail": "dispatch_failed"}
+        assert await counters(service.client) == expected_counters(before)
+        assert not service.task.done()
+
+        following = await asyncio.wait_for(
+            service.client.post(CHAT_URL, json=PAYLOAD), timeout=1
+        )
+        assert following.status_code == 200
+        assert len(requests) == 2
+        assert not service.task.done()
+        await asyncio.wait_for(service.queue.join(), timeout=1)
+
+    errors = [record for record in caplog.records if record.exc_info]
+    assert any(
+        record.levelno >= 40 and record.exc_info[0] is error_type
+        for record in errors
+    )
+
+
+@pytest.mark.asyncio
 async def test_decoded_body_does_not_keep_upstream_compression_or_length_headers(serving):
     body = b'{"choices": [], "padding": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
 

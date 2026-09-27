@@ -2,11 +2,14 @@ import asyncio
 from time import monotonic
 
 import httpx
+import logging
 
 from gateway.execution.forwarding import forward_chat
 from gateway.models.queued_request import QueuedRequest
 from gateway.models.workers.worker_state import WorkerState
+from gateway.execution.errors import DispatchError
 
+logger = logging.getLogger(__name__)
 
 async def dispatch_requests(
     client: httpx.AsyncClient,
@@ -52,6 +55,15 @@ async def dispatch_one(
     except asyncio.CancelledError:
         pending.result.cancel()
         raise
+    except Exception:
+        logger.exception(
+            "Unexpected dispatch failure for worker %s",
+            worker.id,
+        )
+        if not pending.result.done():
+            pending.result.set_exception(
+                DispatchError("Request dispatch failed")
+            )
 
 
 async def forward_until_done(

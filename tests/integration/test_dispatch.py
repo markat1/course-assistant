@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 from gateway.execution.dispatch import dispatch_requests
+from gateway.execution.errors import DispatchError
 from gateway.execution.queueing import enqueue_request
 
 
@@ -97,6 +98,36 @@ async def test_transport_error_does_not_stop_next_request(request_queue, worker,
     assert (await second.result).status_code == 200
     assert len(requests) == 2
     assert worker.gateway_queue_depth == 0
+
+
+@pytest.mark.asyncio
+async def test_unexpected_error_resolves_result_and_dispatches_next_request(
+    request_queue, worker, chat_payload, caplog
+):
+    first = enqueue_request(request_queue, worker, chat_payload, timeout_s=60)
+    second = enqueue_request(request_queue, worker, chat_payload, timeout_s=60)
+    requests = []
+
+    def engine(request):
+        requests.append(request)
+        if len(requests) == 1:
+            raise RuntimeError("Internal failure")
+        return httpx.Response(200, json={"message": "recovered"})
+
+    await drain(request_queue, worker, engine)
+
+    with pytest.raises(DispatchError, match="Request dispatch failed"):
+        await first.result
+    assert (await second.result).json() == {"message": "recovered"}
+    assert len(requests) == 2
+    assert worker.gateway_queue_depth == 0
+    assert any(
+        record.levelno >= 40
+        and record.exc_info
+        and record.exc_info[0] is RuntimeError
+        and worker.id in record.getMessage()
+        for record in caplog.records
+    )
 
 
 @pytest.mark.asyncio
