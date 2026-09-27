@@ -111,7 +111,7 @@ def ready_worker(kv_usage):
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("kv_usage", "status", "reason"),
-    [(None, 503, "no_eligible_workers"), (0.9, 429, "kv_pressure")],
+    [(None, 503, "no_eligible_workers"), (0.9, 503, "kv_pressure")],
 )
 async def test_admission_rejection_increments_only_its_shed_series(
     client, kv_usage, status, reason

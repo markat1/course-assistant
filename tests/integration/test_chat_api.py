@@ -114,7 +114,7 @@ async def test_worker_response_passes_through_queue_without_retry_or_gateway_she
 
 
 @pytest.mark.asyncio
-async def test_full_queue_returns_429_and_preserves_existing_request(serving):
+async def test_full_queue_returns_503_and_preserves_existing_request(serving):
     requests = []
 
     def engine(request):
@@ -127,12 +127,12 @@ async def test_full_queue_returns_429_and_preserves_existing_request(serving):
         )
         before = await counters(service.client)
         response = await service.client.post(CHAT_URL, json=PAYLOAD)
-        assert response.status_code == 429
+        assert response.status_code == 503
         assert response.json() == {"detail": "queue_full"}
         assert service.queue.qsize() == 1
         assert not existing.result.done()
         assert requests == []
-        assert await counters(service.client) == expected_counters(before, reason="queue_full", code=429)
+        assert await counters(service.client) == expected_counters(before, reason="queue_full", code=503)
 
 
 @pytest.mark.asyncio

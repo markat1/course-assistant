@@ -275,5 +275,5 @@ async def test_prepared_worker_under_kv_pressure_is_rejected_by_admission(
 
     decision = admit([worker], max_metrics_age_s=10.0, kv_usage_limit=0.9)
     assert worker.ready is True
-    assert decision.status_code == 429
+    assert decision.status_code == 503
     assert decision.reason == "kv_pressure"

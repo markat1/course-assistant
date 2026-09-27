@@ -39,8 +39,8 @@ def admit(
 
     if available:
         return AdmissionDecision(
-            status_code=429,
-            reason="kv_pressure"
+            status_code=503,
+            reason="kv_pressure",
         )
 
     return AdmissionDecision(

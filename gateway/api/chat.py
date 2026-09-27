@@ -48,8 +48,9 @@ async def serve_queued_chat(
         )
 
         upstream = await wait_for_response(pending)
+
     except asyncio.QueueFull:
-        reject_before_dispatch("queue_full", 429)
+        reject_before_dispatch("queue_full", 503)
     except TimeoutError:
         reject_before_dispatch("timeout_queue", 504)
     except httpx.TimeoutException as exc:
