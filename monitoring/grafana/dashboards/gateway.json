@@ -98,6 +98,51 @@
         },
         "overrides": []
       }
-  }
+    },
+    {
+      "id": 3,
+      "title": "Worker selections since gateway start",
+      "description": "Worker selections before dispatch. A selection does not mean the request completed. No data means no selection series is available.",
+      "type": "stat",
+      "gridPos": {
+        "x": 16,
+        "y": 0,
+        "w": 8,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "orch_place_total{job=\"gateway\"}",
+          "legendFormat": "{{worker}}",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        },
+        "overrides": []
+      }
+    }
   ]
 }
