@@ -88,3 +88,29 @@ async def test_turn_limit_stops_before_another_model_call(gateway_model):
         await run_turn("Explain KV memory.", model=model, max_turns=1)
 
     assert len(requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_browser_history_reaches_router_and_tutor_without_mutation(gateway_model):
+    from app.conversation import run_turn
+    from app.models.browser.chat_message import BrowserChatMessage
+
+    model, requests = gateway_model
+    history = [
+        BrowserChatMessage(role="system", content="Answer in Danish."),
+        BrowserChatMessage(role="user", content="What is KV memory?"),
+        BrowserChatMessage(
+            role="assistant", content="Stored attention keys and values."
+        ),
+        BrowserChatMessage(role="user", content="Why does it grow?"),
+    ]
+    original = [message.model_dump() for message in history]
+
+    result = await run_turn(history, model=model)
+
+    assert result.last_agent.name == "Course Tutor"
+    assert len(requests) == 2
+    for request in requests:
+        # Each agent's own instructions precede the supplied conversation.
+        assert request["messages"][1:1 + len(history)] == original
+    assert [message.model_dump() for message in history] == original
