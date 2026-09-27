@@ -8,13 +8,12 @@ from fastapi import FastAPI
 
 from gateway.models.settings import Settings
 from gateway.models.workers.worker_state import WorkerState
-from gateway.monitoring.polling import monitor_worker
+from gateway.execution.lifecycle import manage_worker_tasks
 from gateway.models.queued_request import QueuedRequest
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """Lifespan context manager for the FastAPI application."""
-
+    """Manage gateway state, worker tasks and the shared HTTP client."""
     settings = Settings()
     workers = create_workers(settings)
     queues = create_queues(workers, settings.queue_max_size)
@@ -23,23 +22,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.workers = workers
     app.state.queues = queues
 
-    async with httpx.AsyncClient(timeout=settings.upstream_timeout_s, trust_env=False) as client:
+    async with httpx.AsyncClient(
+        timeout=settings.upstream_timeout_s,
+        trust_env=False,
+    ) as client:
         app.state.client = client
 
-        async with asyncio.TaskGroup() as group:
-            tasks = [
-                group.create_task(
-                    monitor_worker(client, worker, settings.metrics_interval_s),
-                    name=f"monitor_worker_{worker.id}"
-                )
-                for worker in workers.values()
-            ]
-
-            try:
-                yield
-            finally:
-                for task in tasks:
-                    task.cancel()
+        async with manage_worker_tasks(
+            client,
+            workers,
+            queues,
+            settings,
+        ):
+            yield
 
 def create_workers(settings: Settings) -> dict[str, WorkerState]:
     """Create worker state from configured endpoints."""
