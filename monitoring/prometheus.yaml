@@ -12,3 +12,14 @@ scrape_configs:
    static_configs:
      - targets:
          - gateway:8780
+ - job_name: sglang
+   metrics_path: /metrics
+   static_configs:
+     - targets:
+         - worker-a:8000
+       labels:
+         worker: worker-a
+     - targets:
+         - worker-b:8000
+       labels:
+         worker: worker-b

@@ -1,0 +1,42 @@
+x-sglang-worker: &sglang-worker
+  image: lmsysorg/sglang:v0.5.20-cu130@sha256:06e4f2ed21afde4ff513cda65070124e727ba23ccaeff7712b8c40e1097d611f
+  shm_size: "8gb"
+  volumes:
+    - huggingface-cache:/root/.cache/huggingface
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            device_ids: ["0"]
+            capabilities: [gpu]
+  entrypoint: ["python3", "-m", "sglang.launch_server"]
+  command:
+    - --model-path=Qwen/Qwen3-8B
+    - --revision=b968826d9c46dd6066d109eabc6255188de91218
+    - --host=0.0.0.0
+    - --port=8000
+    - --tp-size=1
+    - --dtype=bfloat16
+    - --context-length=8192
+    - --mem-fraction-static=0.40
+    - --max-total-tokens=32768
+    - --max-running-requests=8
+    - --chunked-prefill-size=2048
+    - --tool-call-parser=qwen25
+    - '--default-chat-template-kwargs={"enable_thinking":false}'
+    - --enable-metrics
+
+services:
+  worker-a:
+    <<: *sglang-worker
+    ports:
+      - "127.0.0.1:8001:8000"
+
+  worker-b:
+    <<: *sglang-worker
+    ports:
+      - "127.0.0.1:8002:8000"
+
+volumes:
+  huggingface-cache:
