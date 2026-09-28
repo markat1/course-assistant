@@ -1,0 +1,23 @@
+services:
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:v0.11.4
+    environment:
+      WEBUI_AUTH: "false"
+      ENABLE_OLLAMA_API: "false"
+      ENABLE_OPENAI_API: "true"
+      OPENAI_API_BASE_URLS: http://app:8781/v1
+      OPENAI_API_KEYS: local
+      ENABLE_TITLE_GENERATION: "false"
+      ENABLE_TAGS_GENERATION: "false"
+      ENABLE_FOLLOW_UP_GENERATION: "false"
+      DEFAULT_INTERFACE_SETTINGS: '{"showChangelog":false,"params":{"stream_response":false}}'
+      ENABLE_PERSISTENT_CONFIG: "false"
+    ports:
+    - "127.0.0.1:13001:8080"
+    volumes:
+      - open-webui-data:/app/backend/data
+    depends_on:
+      - app
+
+volumes:
+  open-webui-data:
