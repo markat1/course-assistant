@@ -16,5 +16,7 @@ exec ssh -t -i "$key" \
   -L 127.0.0.1:29090:127.0.0.1:19090 \
   -L 127.0.0.1:28001:127.0.0.1:8001 \
   -L 127.0.0.1:28002:127.0.0.1:8002 \
+  -L 127.0.0.1:18781:127.0.0.1:8781 \
+  -L 127.0.0.1:23001:127.0.0.1:13001 \
   -- "$target" \
   "cd ~/course-assistant/releases/$revision && export COMPOSE_PROJECT_NAME=course-assistant && exec bash -l"
