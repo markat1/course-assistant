@@ -1,5 +1,10 @@
 # H100 deployment and smoke tests
 
+> Deployment plan changed on 28 September 2026: the user chose Kubernetes/k3s
+> and HAMi. Continue with [the Kubernetes plan](kubernetes-runbook.md). The Compose
+> deployment below is retained as the earlier path. The CUDA/BF16 probe passed;
+> continue with Kubernetes runtime checks rather than starting Compose workers.
+
 Status: local browser-to-gateway rejection smoke passed; no remote deployment
 or real GPU result recorded yet. App and UI packaging is committed through
 968e395. The app/UI SSH forwards are implemented in setup/ssh_gpu.sh and

@@ -1,0 +1,5 @@
+disable:
+  - traefik
+  - servicelb
+
+write-kubeconfig-mode: "0600"
