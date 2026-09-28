@@ -1,0 +1,14 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: app/Dockerfile
+    environment:
+      APP_GATEWAY_URL: http://gateway:8780/v1
+      APP_MODEL_NAME: ${GATEWAY_MODEL_NAME:?Set GATEWAY_MODEL_NAME in .env}
+      APP_REQUEST_TIMEOUT_S: ${APP_REQUEST_TIMEOUT_S:-30}
+      APP_MAX_TURNS: ${APP_MAX_TURNS:-6}
+    ports:
+      - "127.0.0.1:8781:8781"
+    depends_on:
+      - gateway
