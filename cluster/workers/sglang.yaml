@@ -53,12 +53,14 @@ spec:
               path: /health
               port: http
             periodSeconds: 10
+            timeoutSeconds: 10
             failureThreshold: 90
           readinessProbe:
             httpGet:
               path: /health
               port: http
             periodSeconds: 10
+            timeoutSeconds: 10
           resources:
             requests:
               cpu: "4"
