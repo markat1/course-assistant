@@ -37,7 +37,7 @@ class Settings(BaseSettings):
         allow_inf_nan=False
     )
     queue_max_size: int = Field(default=16, gt=0)
-    dispatch_concurrency_per_worker: int = Field(default=2, gt=0)
+    dispatch_concurrency_per_worker: int = Field(default=8, gt=0)
     queue_timeout_s: float = Field(
         default=5.0,
         gt=0,

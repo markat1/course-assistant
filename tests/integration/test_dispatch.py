@@ -196,3 +196,49 @@ async def test_caller_cancellation_stops_upstream_and_allows_next_request(reques
         finally:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_connection_failure_marks_worker_unready(request_queue, worker, chat_payload):
+    worker.ready = True
+    pending = enqueue_request(request_queue, worker, chat_payload, timeout_s=60)
+
+    def engine(request):
+        raise httpx.ConnectError("Connection refused", request=request)
+
+    await drain(request_queue, worker, engine)
+
+    with pytest.raises(httpx.ConnectError):
+        await pending.result
+    assert worker.ready is False
+
+
+@pytest.mark.asyncio
+async def test_slow_worker_stays_ready_after_read_timeout(request_queue, worker, chat_payload):
+    worker.ready = True
+    pending = enqueue_request(request_queue, worker, chat_payload, timeout_s=60)
+
+    def engine(request):
+        raise httpx.ReadTimeout("Engine too slow", request=request)
+
+    await drain(request_queue, worker, engine)
+
+    with pytest.raises(httpx.ReadTimeout):
+        await pending.result
+    assert worker.ready is True
+
+
+@pytest.mark.asyncio
+async def test_request_counts_as_in_flight_only_while_dispatched(request_queue, worker, chat_payload):
+    pending = enqueue_request(request_queue, worker, chat_payload, timeout_s=60)
+    observed = []
+
+    def engine(request):
+        observed.append(worker.gateway_in_flight)
+        return httpx.Response(200, json={"choices": []})
+
+    await drain(request_queue, worker, engine)
+
+    assert (await pending.result).status_code == 200
+    assert observed == [1]
+    assert worker.gateway_in_flight == 0

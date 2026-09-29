@@ -23,6 +23,7 @@ class WorkerState(BaseModel):
     )
 
     gateway_queue_depth: int = Field(default=0, ge=0)
+    gateway_in_flight: int = Field(default=0, ge=0)
 
     @property
     def metrics_age_s(self) -> float | None:

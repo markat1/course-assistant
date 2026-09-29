@@ -46,9 +46,19 @@ async def dispatch_one(
         return
 
     pending.started_at = now
+    worker.gateway_in_flight += 1
 
     try:
         await forward_until_done(client, worker, pending)
+    except httpx.ConnectError as exc:
+        worker.ready = False
+        logger.warning(
+            "Connection to worker %s failed; marked not ready",
+            worker.id,
+        )
+        if not pending.result.done():
+            pending.result.set_exception(exc)
+
     except httpx.HTTPError as exc:
         if not pending.result.done():
             pending.result.set_exception(exc)
@@ -64,6 +74,8 @@ async def dispatch_one(
             pending.result.set_exception(
                 DispatchError("Request dispatch failed")
             )
+    finally:
+        worker.gateway_in_flight -= 1
 
 
 async def forward_until_done(

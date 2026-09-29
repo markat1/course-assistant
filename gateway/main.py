@@ -67,6 +67,7 @@ async def chat_completions(chat_request: ChatRequest, request: Request):
     worker = select_worker(
         decision.workers,
         max_metrics_age_s=settings.metrics_max_age_s,
+        queue_max_size=settings.queue_max_size,
     )
 
     if worker is None:

@@ -36,7 +36,7 @@ def serving(monkeypatch):
         queue = asyncio.Queue(maxsize=1)
         settings = SimpleNamespace(
             metrics_max_age_s=10, kv_usage_limit=0.9, queue_timeout_s=timeout_s,
-            capacity_retry_after_s=7,
+            capacity_retry_after_s=7, queue_max_size=1,
         )
         monkeypatch.setattr(app.state, "workers", {worker.id: worker}, raising=False)
         monkeypatch.setattr(app.state, "queues", {worker.id: queue}, raising=False)
@@ -158,8 +158,7 @@ async def test_queue_deadline_returns_504_without_worker_call(serving):
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "error_type,status,detail",
-    [(httpx.ReadTimeout, 504, "upstream_timeout"),
-     (httpx.ConnectError, 502, "upstream_unavailable")],
+    [(httpx.ReadTimeout, 504, "upstream_timeout")],
 )
 async def test_upstream_transport_error_is_not_shedding_and_next_request_succeeds(
     serving, error_type, status, detail
@@ -183,6 +182,27 @@ async def test_upstream_transport_error_is_not_shedding_and_next_request_succeed
         assert response.status_code == 200
         assert len(requests) == 2
         assert await counters(service.client) == expected_counters(expected_counters(before))
+
+
+@pytest.mark.asyncio
+async def test_refused_connection_returns_502_then_sheds_until_worker_is_prepared(serving):
+    requests = []
+
+    def engine(request):
+        requests.append(request)
+        raise httpx.ConnectError("connection refused", request=request)
+
+    async with serving(engine) as service:
+        response = await service.client.post(CHAT_URL, json=PAYLOAD)
+        assert response.status_code == 502
+        assert response.json() == {"detail": "upstream_unavailable"}
+        assert service.worker.ready is False
+
+        response = await service.client.post(CHAT_URL, json=PAYLOAD)
+        assert response.status_code == 503
+        assert response.json() == {"detail": "no_eligible_workers"}
+        assert response.headers["retry-after"] == "7"
+        assert len(requests) == 1
 
 
 @pytest.mark.asyncio

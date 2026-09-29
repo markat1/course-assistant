@@ -1,27 +1,38 @@
-from collections.abc import Iterable
+import random
+from collections.abc import Callable, Iterable
+
 from gateway.models.workers.worker_state import WorkerState
 
-def select_worker(workers: Iterable[WorkerState],*,max_metrics_age_s: float) -> WorkerState | None:
-    """Select the least-loaded ready worker with fresh, complete metrics."""
-    selected = None
-    lowest_load = float("inf")
 
-    for worker in workers:
-        age = worker.metrics_age_s
+from gateway.models.workers.worker_state import WorkerState
 
-        if not worker.ready or age is None or age > max_metrics_age_s:
-            continue
 
-        running = worker.engine_running
-        waiting = worker.engine_waiting
+def gateway_load(worker: WorkerState) -> int:
+    """Gateway-local queued and dispatched work plus the engine's own backlog."""
+    return worker.gateway_queue_depth + worker.gateway_in_flight + (worker.engine_waiting or 0)
 
-        if running is None or waiting is None or worker.kv_cache_usage_ratio is None:
-            continue
 
-        load = worker.gateway_queue_depth + waiting + running
+def select_worker(
+        workers: Iterable[WorkerState],
+        *,
+        max_metrics_age_s: float,
+        queue_max_size: int,
+        choose: Callable[[list[WorkerState]], WorkerState] = random.choice,
+) -> WorkerState | None:
+    """Select a least-loaded eligible worker, preferring workers with queue room."""
+    eligible = [
+        worker for worker in workers
+        if worker.ready
+        and worker.metrics_age_s is not None
+        and worker.metrics_age_s <= max_metrics_age_s
+        and worker.engine_running is not None
+        and worker.engine_waiting is not None
+        and worker.kv_cache_usage_ratio is not None
+    ]
+    if not eligible:
+        return None
 
-        if load < lowest_load:
-            selected = worker
-            lowest_load = load
-
-    return selected
+    with_room = [worker for worker in eligible if worker.gateway_queue_depth < queue_max_size]
+    candidates = with_room or eligible
+    lowest = min(gateway_load(worker) for worker in candidates)
+    return choose([worker for worker in candidates if gateway_load(worker) == lowest])
