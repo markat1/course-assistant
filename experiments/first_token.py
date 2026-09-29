@@ -3,15 +3,12 @@ import time
 
 import httpx
 
+from gateway.monitoring.warmup_request import WARMUP_PREFIX
+
 TARGET_URL = os.environ.get("TARGET_URL", "http://host.docker.internal:30002/v1")
 MODEL = os.environ.get("MODEL", "Qwen/Qwen3-8B")
 RUNS = int(os.environ.get("RUNS", "6"))
 
-PASSAGE = (
-    "Course passage: A KV cache stores attention keys and values for every "
-    "previous token so decoding does not recompute them. Its size grows with "
-    "layers, KV heads, head dimension, data type and sequence length. "
-)
 QUESTIONS = [
     "Why does KV cache memory limit concurrency?",
     "What does prefix caching reuse?",
@@ -22,7 +19,7 @@ QUESTIONS = [
 ]
 
 def shared_prefix() -> str:
-    return "You are the Course Tutor. \n" + PASSAGE * 40
+    return WARMUP_PREFIX
 
 def build_payload(question:str) -> dict:
     return {

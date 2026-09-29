@@ -5,7 +5,7 @@ import httpx
 from gateway.models.settings import Settings
 from gateway.models.workers.worker_state import WorkerState
 from gateway.monitoring.readiness import prepare_worker
-from gateway.monitoring.warmup_request import build_warmup_request
+from gateway.monitoring.warmup_request import build_warmup_requests
 
 async def check_worker(
         client: httpx.AsyncClient,
@@ -17,7 +17,7 @@ async def check_worker(
     await prepare_worker(
         client,
         worker,
-        build_warmup_request(settings),
+        build_warmup_requests(settings),
         warmup_timeout_s=settings.warmup_timeout_s,
         max_metrics_age_s=settings.metrics_max_age_s
     )

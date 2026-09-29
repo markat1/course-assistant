@@ -72,6 +72,10 @@ async def test_monitor_clears_readiness_and_repeats_preparation_after_failure(
         ("GET", "/health"),
         ("GET", "/v1/models"),
         ("POST", "/v1/chat/completions"),
+        ("POST", "/v1/chat/completions"),
+        ("POST", "/v1/chat/completions"),
+        ("POST", "/v1/chat/completions"),
+        ("POST", "/v1/chat/completions"),
         ("GET", "/metrics"),
     ]
     assert any(record.levelno >= 30 and worker.id in record.getMessage()

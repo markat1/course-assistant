@@ -48,7 +48,7 @@ async def test_worker_becomes_ready_only_after_all_startup_checks(
         await prepare_worker(
             client,
             worker,
-            chat_payload,
+            [chat_payload],
             warmup_timeout_s=1.0,
             max_metrics_age_s=10.0,
         )
@@ -88,7 +88,7 @@ async def test_http_failure_stops_preparation_and_clears_readiness(
     async with httpx.AsyncClient(transport=httpx.MockTransport(engine)) as client:
         with pytest.raises(httpx.HTTPStatusError) as caught:
             await prepare_worker(
-                client, worker, chat_payload,
+                client, worker, [chat_payload],
                 warmup_timeout_s=1.0, max_metrics_age_s=10.0,
             )
 
@@ -119,7 +119,7 @@ async def test_invalid_engine_data_cannot_restore_readiness(
     async with httpx.AsyncClient(transport=httpx.MockTransport(engine)) as client:
         with pytest.raises(ValueError):
             await prepare_worker(
-                client, worker, chat_payload,
+                client, worker, [chat_payload],
                 warmup_timeout_s=1.0, max_metrics_age_s=10.0,
             )
 
@@ -141,7 +141,7 @@ async def test_stale_metrics_prevent_readiness_after_successful_warmup(
     async with httpx.AsyncClient(transport=httpx.MockTransport(engine)) as client:
         with pytest.raises(ValueError, match="Worker metrics are not fresh"):
             await prepare_worker(
-                client, worker, chat_payload,
+                client, worker, [chat_payload],
                 warmup_timeout_s=1.0, max_metrics_age_s=10.0,
             )
 
@@ -177,7 +177,7 @@ async def test_cancellation_stops_preparation_and_keeps_worker_unready(
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(engine)) as client:
         task = asyncio.create_task(prepare_worker(
-            client, worker, chat_payload,
+            client, worker, [chat_payload],
             warmup_timeout_s=10.0, max_metrics_age_s=10.0,
         ))
         try:
@@ -213,7 +213,7 @@ async def test_warmup_timeout_prevents_readiness(
         async with asyncio.timeout(1):
             with pytest.raises(TimeoutError):
                 await prepare_worker(
-                    client, worker, chat_payload,
+                    client, worker, [chat_payload],
                     warmup_timeout_s=0.02, max_metrics_age_s=10.0,
                 )
 
@@ -238,7 +238,7 @@ async def test_failed_worker_can_be_prepared_again_after_engine_recovers(
     async with httpx.AsyncClient(transport=httpx.MockTransport(engine)) as client:
         with pytest.raises(httpx.HTTPStatusError):
             await prepare_worker(
-                client, worker, chat_payload,
+                client, worker, [chat_payload],
                 warmup_timeout_s=1.0, max_metrics_age_s=10.0,
             )
         assert worker.ready is False
@@ -246,7 +246,7 @@ async def test_failed_worker_can_be_prepared_again_after_engine_recovers(
         engine_responses[warmup_endpoint] = successful_response
         requests.clear()
         await prepare_worker(
-            client, worker, chat_payload,
+            client, worker, [chat_payload],
             warmup_timeout_s=1.0, max_metrics_age_s=10.0,
         )
 
@@ -269,7 +269,7 @@ async def test_prepared_worker_under_kv_pressure_is_rejected_by_admission(
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(engine)) as client:
         await prepare_worker(
-            client, worker, chat_payload,
+            client, worker, [chat_payload],
             warmup_timeout_s=1.0, max_metrics_age_s=10.0,
         )
 
@@ -277,3 +277,49 @@ async def test_prepared_worker_under_kv_pressure_is_rejected_by_admission(
     assert worker.ready is True
     assert decision.status_code == 503
     assert decision.reason == "kv_pressure"
+
+
+@pytest.mark.asyncio
+async def test_every_warmup_request_is_sent_before_metrics(
+    worker, chat_payload, engine_responses
+):
+    requests = []
+
+    def engine(request):
+        key = request.method, request.url.path
+        requests.append(key)
+        return engine_responses[key]
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(engine)) as client:
+        await prepare_worker(
+            client, worker, [chat_payload, chat_payload, chat_payload],
+            warmup_timeout_s=1.0, max_metrics_age_s=10.0,
+        )
+
+    assert requests == [
+        ("GET", "/health"),
+        ("GET", "/v1/models"),
+        ("POST", "/v1/chat/completions"),
+        ("POST", "/v1/chat/completions"),
+        ("POST", "/v1/chat/completions"),
+        ("GET", "/metrics"),
+    ]
+    assert worker.ready is True
+
+
+@pytest.mark.asyncio
+async def test_preparation_without_warmup_requests_is_rejected(worker, engine_responses):
+    requests = []
+
+    def engine(request):
+        requests.append(request)
+        return engine_responses[request.method, request.url.path]
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(engine)) as client:
+        with pytest.raises(ValueError):
+            await prepare_worker(
+                client, worker, [], warmup_timeout_s=1.0, max_metrics_age_s=10.0,
+            )
+
+    assert requests == []
+    assert worker.ready is False

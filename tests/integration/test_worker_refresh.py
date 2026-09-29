@@ -57,11 +57,17 @@ async def test_refresh_prepares_worker_once_then_updates_metrics(worker):
         ("GET", "/health"),
         ("GET", "/v1/models"),
         ("POST", "/v1/chat/completions"),
+        ("POST", "/v1/chat/completions"),
+        ("POST", "/v1/chat/completions"),
+        ("POST", "/v1/chat/completions"),
+        ("POST", "/v1/chat/completions"),
         ("GET", "/metrics"),
         ("GET", "/metrics"),
     ]
-    assert len(warmup_bodies) == 1
-    assert warmup_bodies[0]["model"] == settings.model_name
+    assert len(warmup_bodies) == 5
     assert warmup_bodies[0]["messages"][-1]["content"] == settings.warmup_prompt
-    assert warmup_bodies[0]["max_tokens"] == 48
-    assert warmup_bodies[0]["stream"] is False
+    assert len({body["messages"][0]["content"] for body in warmup_bodies}) == 1
+    assert len({body["messages"][-1]["content"] for body in warmup_bodies}) == 5
+    assert all(body["model"] == settings.model_name for body in warmup_bodies)
+    assert all(body["max_tokens"] == 48 for body in warmup_bodies)
+    assert all(body["stream"] is False for body in warmup_bodies)
