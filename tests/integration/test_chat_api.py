@@ -338,3 +338,57 @@ async def test_guard_rejects_before_admission_without_reaching_the_engine(servin
 
 def shed_lines(metrics_text: str) -> list[str]:
     return [line for line in metrics_text.splitlines() if line.startswith("orch_shed_total{")]
+
+
+def overflow_value(metrics_text: str, decision: str, code: int) -> float:
+    prefix = f'orch_overflow_total{{code="{code}",decision="{decision}"}} '
+    for line in metrics_text.splitlines():
+        if line.startswith(prefix):
+            return float(line[len(prefix):])
+    return 0.0
+
+
+@pytest.mark.asyncio
+async def test_gateway_capacity_rejection_is_counted_as_leave_with_overflow_disabled(serving):
+    def engine(request):
+        return httpx.Response(200, json={"choices": []})
+
+    async with serving(engine) as service:
+        service.worker.ready = False
+        before = (await service.client.get("/metrics")).text
+        response = await service.client.post(CHAT_URL, json=PAYLOAD)
+        after = (await service.client.get("/metrics")).text
+
+    assert response.status_code == 503
+    assert overflow_value(after, "leave_disabled", 503) == overflow_value(before, "leave_disabled", 503) + 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status,decision", [(429, "stay"), (500, "stay"), (503, "leave_disabled"), (529, "leave_disabled")])
+async def test_engine_error_status_is_classified_stay_or_leave(serving, status, decision):
+    def engine(request):
+        return httpx.Response(status, json={"error": "engine"})
+
+    async with serving(engine) as service:
+        before = (await service.client.get("/metrics")).text
+        response = await service.client.post(CHAT_URL, json=PAYLOAD)
+        after = (await service.client.get("/metrics")).text
+
+    assert response.status_code == status
+    assert overflow_value(after, decision, status) == overflow_value(before, decision, status) + 1
+
+
+@pytest.mark.asyncio
+async def test_success_and_guard_rejections_make_no_overflow_decision(serving):
+    def engine(request):
+        return httpx.Response(200, json={"choices": []})
+
+    async with serving(engine) as service:
+        before = (await service.client.get("/metrics")).text
+        await service.client.post(CHAT_URL, json=PAYLOAD)
+        await service.client.post(CHAT_URL, json={**PAYLOAD, "max_tokens": 4096})
+        after = (await service.client.get("/metrics")).text
+
+    assert [line for line in after.splitlines() if line.startswith("orch_overflow_total{")] == [
+        line for line in before.splitlines() if line.startswith("orch_overflow_total{")
+    ]

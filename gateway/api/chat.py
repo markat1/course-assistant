@@ -11,6 +11,8 @@ from gateway.models.queued_request import QueuedRequest
 from gateway.models.workers.worker_state import WorkerState
 from gateway.monitoring.metrics import SHED_TOTAL
 from gateway.execution.errors import DispatchError
+from gateway.monitoring.metrics import OVERFLOW_TOTAL
+from gateway.policies.overflow import stay_or_leave
 
 from fastapi.responses import StreamingResponse
 from starlette.background import BackgroundTask
@@ -28,12 +30,21 @@ def reject_before_dispatch(
         headers["Retry-After"] = str(retry_after_s)
 
     SHED_TOTAL.labels(reason=reason, code=str(status_code)).inc()
+    record_overflow_decision(status_code)
 
     raise HTTPException(
         status_code=status_code,
         detail=reason,
         headers=headers,
     )
+
+
+def record_overflow_decision(status_code: int) -> None:
+    """Count where a failed request would go; no overflow destination is configured."""
+    decision = "leave_disabled" if stay_or_leave(status_code) == "leave" else "stay"
+    OVERFLOW_TOTAL.labels(decision=decision, code=str(status_code)).inc()
+
+
 
 def to_client_response(upstream: httpx.Response) -> Response:
     """Preserve the upstream body, status and selected response headers."""
@@ -87,6 +98,9 @@ async def serve_queued_chat(
             status_code=500,
             detail="dispatch_failed",
         ) from exc
+
+    if upstream.status_code != 200:
+        record_overflow_decision(upstream.status_code)
 
     if not payload.stream:
         return to_client_response(upstream)

@@ -29,3 +29,10 @@ GUARD_REJECTED_TOTAL = Counter(
     labelnames=["reason"],
     registry=GATEWAY_REGISTRY
 )
+
+OVERFLOW_TOTAL = Counter(
+    "orch_overflow_total",
+    "Stay-or-leave decisions for failed requests; overflow is disabled, so leave is only counted.",
+    labelnames=["decision", "code"],
+    registry=GATEWAY_REGISTRY
+)
