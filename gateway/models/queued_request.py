@@ -1,5 +1,5 @@
-from asyncio import Future
-from dataclasses import dataclass
+from asyncio import Event, Future
+from dataclasses import dataclass, field
 
 from httpx import Response
 from gateway.models.chat.chat_request import ChatRequest
@@ -11,3 +11,4 @@ class QueuedRequest:
     result: Future[Response]
     expires_at: float
     started_at: float | None = None
+    finished: Event = field(default_factory=Event)

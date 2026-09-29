@@ -7,7 +7,7 @@ class ChatRequest(BaseModel):
 
     model: str = Field(min_length=1, pattern=r"\S")
     messages: list[ChatMessage] = Field(min_length=1)
-    stream: Literal[False] = False
+    stream: bool = False
     max_tokens: int | None = Field(default=None, gt=0)
 
     @model_validator(mode="after")

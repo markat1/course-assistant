@@ -12,6 +12,10 @@ from gateway.models.workers.worker_state import WorkerState
 from gateway.monitoring.metrics import SHED_TOTAL
 from gateway.execution.errors import DispatchError
 
+from fastapi.responses import StreamingResponse
+from starlette.background import BackgroundTask
+from gateway.api.streaming import finish_stream, relay_stream
+
 def reject_before_dispatch(
     reason: str,
     status_code: int,
@@ -84,4 +88,16 @@ async def serve_queued_chat(
             detail="dispatch_failed",
         ) from exc
 
-    return to_client_response(upstream)
+    if not payload.stream:
+        return to_client_response(upstream)
+
+    if upstream.status_code != 200:
+        await upstream.aread()
+        await finish_stream(upstream, pending)
+        return to_client_response(upstream)
+
+    return StreamingResponse(
+        relay_stream(upstream, pending),
+        media_type="text/event-stream",
+        background=BackgroundTask(finish_stream, upstream, pending),
+    )

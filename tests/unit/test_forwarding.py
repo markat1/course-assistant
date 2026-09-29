@@ -94,3 +94,28 @@ async def test_forwarding_propagates_transport_errors_without_retry(error_type, 
             await forward_chat(client, worker, payload)
 
     assert len(requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_streaming_request_returns_an_unread_event_stream(payload_body):
+    worker = WorkerState(id="worker-a", base_url="http://worker-a:8000/v1")
+    payload = ChatRequest.model_validate({**payload_body, "stream": True})
+    events = [b'data: {"choices": []}\n\n', b"data: [DONE]\n\n"]
+    requests = []
+
+    async def event_chunks():
+        for event in events:
+            yield event
+
+    def engine(request):
+        requests.append(request)
+        return httpx.Response(200, content=event_chunks(), headers={"content-type": "text/event-stream"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(engine)) as client:
+        response = await forward_chat(client, worker, payload)
+        assert not response.is_stream_consumed
+        chunks = [chunk async for chunk in response.aiter_raw()]
+        await response.aclose()
+
+    assert json.loads(requests[0].content)["stream"] is True
+    assert b"".join(chunks) == b"".join(events)

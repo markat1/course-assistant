@@ -260,3 +260,55 @@ async def test_decoded_body_does_not_keep_upstream_compression_or_length_headers
         assert int(response.headers["content-length"]) == len(body)
         assert "content-encoding" not in response.headers
         assert "connection" not in response.headers
+
+
+@pytest.mark.asyncio
+async def test_streaming_chat_is_relayed_and_holds_the_dispatch_slot_until_done(serving):
+    first_sent = asyncio.Event()
+    release = asyncio.Event()
+    held = []
+
+    async def events():
+        yield b'data: {"id": "1"}\n\n'
+        first_sent.set()
+        await release.wait()
+        yield b"data: [DONE]\n\n"
+
+    def engine(request):
+        return httpx.Response(200, content=events(), headers={"content-type": "text/event-stream"})
+
+    async with serving(engine) as service:
+        async def check_slot_then_release():
+            await first_sent.wait()
+            held.append(service.worker.gateway_in_flight)
+            release.set()
+
+        checker = asyncio.create_task(check_slot_then_release())
+        response = await asyncio.wait_for(
+            service.client.post(CHAT_URL, json={**PAYLOAD, "stream": True}), timeout=2
+        )
+        await checker
+
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+        assert response.content == b'data: {"id": "1"}\n\ndata: [DONE]\n\n'
+        assert held == [1]
+        await asyncio.wait_for(service.queue.join(), timeout=1)
+        assert service.worker.gateway_in_flight == 0
+
+
+@pytest.mark.asyncio
+async def test_streaming_request_with_engine_error_returns_the_error_unstreamed(serving):
+    def engine(request):
+        return httpx.Response(503, json={"error": "busy"}, headers={"retry-after": "3"})
+
+    async with serving(engine) as service:
+        response = await asyncio.wait_for(
+            service.client.post(CHAT_URL, json={**PAYLOAD, "stream": True}), timeout=2
+        )
+
+        assert response.status_code == 503
+        assert response.json() == {"error": "busy"}
+        assert response.headers["retry-after"] == "3"
+        await asyncio.wait_for(service.queue.join(), timeout=1)
+        assert service.worker.gateway_in_flight == 0

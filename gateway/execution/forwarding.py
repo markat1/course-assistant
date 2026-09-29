@@ -8,10 +8,12 @@ async def forward_chat(
         worker: WorkerState,
         payload: ChatRequest
 ) -> httpx.Response:
-    """Forward one non-streaming request to the selected worker."""
+    """Forward one request; a streaming request returns before its body is read."""
     url = f"{str(worker.base_url).rstrip('/')}/chat/completions"
+    body = payload.model_dump(mode="json", exclude_unset=True)
 
-    return await client.post(
-        url,
-        json=payload.model_dump(mode="json", exclude_unset=True),
-    )
+    if payload.stream:
+        request = client.build_request("POST", url, json=body)
+        return await client.send(request, stream=True)
+
+    return await client.post(url, json=body)

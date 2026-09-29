@@ -96,6 +96,8 @@ async def forward_until_done(
 
         if not pending.result.done():
             pending.result.set_result(upstream.result())
+            if pending.payload.stream:
+                await pending.finished.wait()
     finally:
         if not upstream.done():
             upstream.cancel()

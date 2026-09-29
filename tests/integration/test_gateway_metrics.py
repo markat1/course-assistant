@@ -228,7 +228,7 @@ async def test_validation_rejection_does_not_count_worker_selection(client):
 
 
 @pytest.mark.asyncio
-async def test_unsupported_streaming_is_rejected_before_admission_and_placement(client):
+async def test_invalid_stream_value_is_rejected_before_admission_and_placement(client):
     requests_before = await request_count(client)
     sheds_before = await shed_counts(client)
     placements_before = await placement_counts(client)
@@ -238,7 +238,7 @@ async def test_unsupported_streaming_is_rejected_before_admission_and_placement(
         json={
             "model": "Qwen/Qwen3-8B",
             "messages": [{"role": "user", "content": "Hello"}],
-            "stream": True,
+            "stream": "yes",
         },
     )
 
