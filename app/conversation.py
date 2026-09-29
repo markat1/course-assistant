@@ -1,4 +1,5 @@
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
+from openai.types.responses import ResponseTextDeltaEvent
 
 from agents import (
     Model,
@@ -45,3 +46,25 @@ async def run_turn(
             ),
         ),
     )
+
+async def stream_turn(
+        conversation: str | Sequence[BrowserChatMessage],
+        *,
+        model: Model,
+        max_turns: int = 6,
+) -> AsyncIterator[str]:
+    """Run Router -> Tutor -> tools and yield only the answer text as it is generated"""
+    tutor = create_tutor(model)
+    router = create_router(model, tutor)
+    result = Runner.run_streamed(
+        router,
+        input=to_agent_input(conversation),
+        max_turns=max_turns,
+        run_config=RunConfig(
+            tracing_disabled=True,
+            model_settings=ModelSettings(max_tokens=256, parallel_tool_calls=False),
+        ),
+    )
+    async for event in result.stream_events():
+        if event.type == "raw_response_event" and isinstance(event.data, ResponseTextDeltaEvent):
+            yield event.data.delta

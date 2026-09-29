@@ -23,7 +23,7 @@ def test_browser_request_preserves_full_text_history():
 
 @pytest.mark.parametrize("changes", [
     {"model": "unknown-model"},
-    {"stream": True},
+    {"stream": "maybe"},
     {"messages": []},
     {"messages": [{"role": "user", "content": "   "}]},
     {"messages": [{"role": "user", "content": None}]},

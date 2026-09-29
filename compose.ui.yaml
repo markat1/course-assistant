@@ -10,7 +10,7 @@ services:
       ENABLE_TITLE_GENERATION: "false"
       ENABLE_TAGS_GENERATION: "false"
       ENABLE_FOLLOW_UP_GENERATION: "false"
-      DEFAULT_INTERFACE_SETTINGS: '{"showChangelog":false,"params":{"stream_response":false}}'
+      DEFAULT_INTERFACE_SETTINGS: '{"showChangelog":false,"params":{"stream_response":true}}'
       ENABLE_PERSISTENT_CONFIG: "false"
     ports:
     - "127.0.0.1:13001:8080"

@@ -178,7 +178,7 @@ async def test_agent_turn_limit_stops_the_browser_request(browser_api):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("changes", [{"stream": True}, {"model": "unknown-model"}])
+@pytest.mark.parametrize("changes", [{"model": "unknown-model"}])
 async def test_unsupported_browser_request_stops_before_inference(browser_api, changes):
     def unexpected_call(request):
         pytest.fail("Invalid requests must not call the engine")
@@ -190,3 +190,49 @@ async def test_unsupported_browser_request_stops_before_inference(browser_api, c
 
     assert response.status_code == 422
     assert requests == []
+
+
+def sse_response(*parts):
+    events = []
+    for index, part in enumerate(parts):
+        delta = {"role": "assistant", "content": part} if index == 0 else {"content": part}
+        events.append({"id": "c1", "object": "chat.completion.chunk", "created": 1, "model": "Qwen/Qwen3-8B",
+                       "choices": [{"index": 0, "delta": delta, "finish_reason": None}]})
+    events.append({"id": "c1", "object": "chat.completion.chunk", "created": 1, "model": "Qwen/Qwen3-8B",
+                   "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]})
+    body = "".join(f"data: {json.dumps(event)}\n\n" for event in events) + "data: [DONE]\n\n"
+    return httpx.Response(200, content=body.encode(), headers={"content-type": "text/event-stream"})
+
+
+def streamed_text(response_text):
+    events = [event for event in response_text.split("\n\n") if event]
+    assert events[-1] == "data: [DONE]"
+    bodies = [json.loads(event.removeprefix("data: ")) for event in events[:-1]]
+    return "".join(body["choices"][0]["delta"].get("content") or "" for body in bodies)
+
+
+@pytest.mark.asyncio
+async def test_browser_chat_streams_the_answer_text_through_the_gateway(browser_api):
+    def answer(request):
+        return sse_response("KV memory ", "grows with context.")
+
+    async with browser_api(answer) as (browser, requests):
+        response = await browser.post("/v1/chat/completions", json={**browser_payload(), "stream": True})
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert streamed_text(response.text) == "KV memory grows with context."
+    assert requests[0]["stream"] is True
+
+
+@pytest.mark.asyncio
+async def test_gateway_rejection_before_the_first_token_is_an_http_error_not_a_stream(browser_api):
+    def reject(request):
+        return httpx.Response(503, json={"detail": "queue_full"}, headers={"retry-after": "7"})
+
+    async with browser_api(reject) as (browser, requests):
+        response = await browser.post("/v1/chat/completions", json={**browser_payload(), "stream": True})
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "queue_full"}
+    assert response.headers["retry-after"] == "7"
