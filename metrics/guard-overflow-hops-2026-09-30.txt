@@ -1,0 +1,40 @@
+# Guard, stay-or-leave and hop record live on the GPU - 29/30 September 2026, ~21:50-21:56 UTC
+# Release 6af70d7 (guard fa4b18b, stay/leave 3b810a5, hop record 6af70d7); 281 local tests.
+# Same cluster: Lambda H100 SXM5, two SGLang workers on 38,000 MiB HAMi slices.
+
+## Guard
+$ curl -s -w "\nHTTP %{http_code}\n" localhost:8780/v1/chat/completions -H 'Content-Type: application/json' -d '{"model":"Qwen/Qwen3-8B","messages":[{"role":"user","content":"Hi"}],"max_tokens":4096}'
+{"detail":"bad_max_tokens"}
+HTTP 400
+
+## Overload (stay/leave): CONCURRENCY=64, REQUESTS=300
+outcomes={503: 252, 200: 48}
+ok_latency_s p50=4.15 p99=6.19 max=6.19
+
+## Locust Class 7 mix, 40 users, 1 minute
+POST     agent          76     0(0.00%) |   1911 ...  p50 1700  p99 3900
+POST     batch          71     0(0.00%) |   2702 ...  p50 2700  p99 4200
+POST     interactive   318     0(0.00%) |   2927 ...  p50 2800  p99 5600
+         Aggregated    465     0(0.00%) |   2727 ...  7.79 req/s
+
+## Counters after the runs
+$ curl -s localhost:8780/metrics | grep -E "^orch_(guard|overflow|hop)"
+orch_guard_rejected_total{reason="bad_max_tokens"} 2.0
+orch_overflow_total{code="503",decision="leave_disabled"} 252.0
+orch_hop_total{backend="recompute",dst="worker-b",src="worker-a"} 200.0
+orch_hop_total{backend="recompute",dst="worker-a",src="worker-b"} 199.0
+orch_hop_tokens_total 431331.0
+# (guard counter is 2 because the guard request was sent twice)
+
+## Interpretation
+# - Guard rejects oversized requests with 400 before admission; no GPU work.
+# - Exactly the 252 capacity 503s were classified leave_disabled (overflow off).
+# - About half of all placements moved a shared prefix to the other worker
+#   (random tie-break, no prefix affinity): strong case for prefix_then_load.
+# - CAVEAT: the ledger remembers only the LAST worker per prefix. Once both workers
+#   have served a prefix, both hold it in their radix cache (Grafana ~97 % hit rate),
+#   so most counted hops land on a warm cache. 431,331 tokens is an upper bound on
+#   recompute, not the actual amount. Planned fix: remember the SET of workers that
+#   hold each prefix and count a hop only when the destination is not in the set.
+# - "KV hop" INFO log lines did not appear in the gateway log (logging level for
+#   gateway.execution.hops); the counters are the evidence.
