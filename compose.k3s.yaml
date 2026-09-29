@@ -1,0 +1,10 @@
+services:
+  gateway:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  prometheus:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./monitoring/prometheus.k3s.yaml:/etc/prometheus/prometheus.yml:ro
