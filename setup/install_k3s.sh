@@ -75,9 +75,25 @@ wait_for_node() {
   fail "Kubernetes node did not become Ready within the startup window."
 }
 
+wait_for_runtimeclass() {
+  local deadline=$((SECONDS + 60))
+
+  while (( SECONDS < deadline )); do
+    if sudo k3s kubectl get runtimeclass nvidia \
+      --request-timeout=5s >/dev/null 2>&1; then
+      return
+    fi
+
+    sleep 2
+  done
+
+  fail "RuntimeClass nvidia was not created within the startup window."
+}
+
 check_cluster() {
   sudo systemctl start k3s
   wait_for_node
+  wait_for_runtimeclass
   sudo k3s kubectl get nodes -o wide
   sudo k3s kubectl get runtimeclass nvidia
 }

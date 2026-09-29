@@ -1,0 +1,20 @@
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: hami
+  namespace: kube-system
+spec:
+  repo: https://project-hami.github.io/HAMi
+  chart: hami
+  version: 2.9.0
+  targetNamespace: kube-system
+  valuesContent: |-
+    scheduler:
+      kubeScheduler:
+        image:
+          registry: registry.k8s.io
+          repository: kube-scheduler
+          tag: v1.35.8
+    devicePlugin:
+      runtimeClassName: nvidia
+      createRuntimeClass: false
