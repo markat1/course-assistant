@@ -39,7 +39,7 @@ def measure(client: httpx.Client, question: str) -> tuple[float, int]:
     response = client.post(f"{TARGET_URL}/chat/completions", json=build_payload(question))
     elapsed = time.perf_counter() - started
     response.raise_for_status()
-    return elapsed, response.json()["usage"]["promt_tokens"]
+    return elapsed, response.json()["usage"]["prompt_tokens"]
 
 def main() -> None:
     print(f"target={TARGET_URL} model={MODEL} runs={RUNS}")
