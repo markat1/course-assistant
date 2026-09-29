@@ -175,3 +175,43 @@ run20 seconds=0.024 prompt_tokens=1671
 # - Fully cached repeats (runs 7-20) took 24-30 ms, more than the 15-17 ms of
 #   15-token extends; SGLang logs 1-token prefills with "cuda graph: False"
 #   (smallest prefill graph is 4 tokens) - a likely but unverified explanation.
+
+## AFTER: gateway warmup with the shared application prefix (release a346be0)
+# prepare_worker now sends 5 warmup requests (same WARMUP_PREFIX as first_token.py,
+# 5 different questions, none identical to the measurement questions) before it
+# marks a worker ready. first_token.py imports the same WARMUP_PREFIX.
+
+### Round A1
+$ sudo k3s kubectl delete pod sglang-1 && sleep 5 && sudo k3s kubectl wait --for=condition=Ready pod/sglang-1 --timeout=600s && sleep 30 && sudo docker compose -p course-assistant logs --since=2m gateway | grep "30002/v1/chat" | tail -6
+pod "sglang-1" deleted from default namespace
+pod/sglang-1 condition met
+gateway-1  | 2026-09-29 20:44:19,997 INFO httpx HTTP Request: POST http://host.docker.internal:30002/v1/chat/completions "HTTP/1.1 200 OK"
+gateway-1  | 2026-09-29 20:44:20,873 INFO httpx HTTP Request: POST http://host.docker.internal:30002/v1/chat/completions "HTTP/1.1 200 OK"
+gateway-1  | 2026-09-29 20:44:21,749 INFO httpx HTTP Request: POST http://host.docker.internal:30002/v1/chat/completions "HTTP/1.1 200 OK"
+gateway-1  | 2026-09-29 20:44:22,714 INFO httpx HTTP Request: POST http://host.docker.internal:30002/v1/chat/completions "HTTP/1.1 200 OK"
+gateway-1  | 2026-09-29 20:44:23,594 INFO httpx HTTP Request: POST http://host.docker.internal:30002/v1/chat/completions "HTTP/1.1 200 OK"
+$ ... first_token.py ... TARGET_URL=http://host.docker.internal:30002/v1
+target=http://host.docker.internal:30002/v1 model=Qwen/Qwen3-8B runs=6
+run1 seconds=0.022 prompt_tokens=1673
+run2 seconds=0.015 prompt_tokens=1671
+run3 seconds=0.015 prompt_tokens=1672
+run4 seconds=0.016 prompt_tokens=1673
+run5 seconds=0.016 prompt_tokens=1674
+run6 seconds=0.016 prompt_tokens=1674
+# First user request on a fresh replica: 22 ms (before: 54-73 ms); no ~100 ms outlier
+# (before: 4/4 restarts).
+
+### Round A2
+$ sudo k3s kubectl delete pod sglang-1 && ... && sudo docker compose -p course-assistant logs --since=2m gateway | grep -c "30002/v1/chat" && ... first_token.py
+pod "sglang-1" deleted from default namespace
+pod/sglang-1 condition met
+5
+target=http://host.docker.internal:30002/v1 model=Qwen/Qwen3-8B runs=6
+run1 seconds=0.023 prompt_tokens=1673
+run2 seconds=0.016 prompt_tokens=1671
+run3 seconds=0.015 prompt_tokens=1672
+run4 seconds=0.016 prompt_tokens=1673
+run5 seconds=0.016 prompt_tokens=1674
+run6 seconds=0.016 prompt_tokens=1674
+# After (n=2 fresh restarts): 5 warmup requests each; first user request 22 and
+# 23 ms; no ~100 ms outlier. Before (n=4): first request 54-73 ms, outlier 4/4.

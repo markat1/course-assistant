@@ -1,0 +1,37 @@
+# Locust run: Class 7 style mix through the gateway - 29 September 2026, 20:13-20:16 UTC
+# Release 2385741; gateway dispatch_concurrency_per_worker=8 (host .env); two SGLang
+# workers (Qwen3-8B BF16, 38,000 MiB HAMi slices, max_running_requests=8).
+# experiments/locustfile.py, official image locustio/locust:2.46.6, headless:
+#   -u 40 -r 2 -t 3m --only-summary
+# Mix (weights 7:2:1 as Abi's Class 7 `mixed`): 28 interactive users (shared ~400-token
+# Tutor prefix + question, 64-256 output tokens, wait 1-3 s), 8 batch users (unique
+# ~2,000-4,000-token document, 256-512 output tokens, wait 2-5 s), 4 agent users
+# (shared ~3,500-token tool prefix, 128 output tokens, wait 0.5-1.5 s).
+# Latencies are end-to-end (non-streaming), so they include output length; not TTFT.
+
+[2026-09-29 20:13:50,079] 2179883ef789/INFO/locust.main: Starting Locust 2.46.6
+[2026-09-29 20:13:50,079] 2179883ef789/INFO/locust.main: Run time limit set to 180 seconds
+[2026-09-29 20:13:50,079] 2179883ef789/INFO/locust.runners: Ramping to 40 users at a rate of 2.00 per second
+[2026-09-29 20:14:09,091] 2179883ef789/INFO/locust.runners: All users spawned: {"AgentUser": 4, "BatchUser": 8, "InteractiveUser": 28} (40 total users)
+[2026-09-29 20:16:49,942] 2179883ef789/INFO/locust.main: --run-time limit reached, shutting down
+Type     Name                                                                          # reqs      # fails |    Avg     Min     Max    Med |   req/s  failures/s
+--------|----------------------------------------------------------------------------|-------|-------------|-------|-------|-------|-------|--------|-----------
+POST     agent                                                                            230     0(0.00%) |   1959     227    4408   1800 |    1.28        0.00
+POST     batch                                                                            219     0(0.00%) |   2716     625    4972   2700 |    1.22        0.00
+POST     interactive                                                                      955     0(0.00%) |   2971     308    6944   2700 |    5.31        0.00
+--------|----------------------------------------------------------------------------|-------|-------------|-------|-------|-------|-------|--------|-----------
+         Aggregated                                                                      1404     0(0.00%) |   2765     227    6944   2600 |    7.81        0.00
+
+Response time percentiles (approximated)
+Type     Name                                                                                  50%    66%    75%    80%    90%    95%    98%    99%  99.9% 99.99%   100% # reqs
+--------|--------------------------------------------------------------------------------|--------|------|------|------|------|------|------|------|------|------|------|------
+POST     agent                                                                                1800   2200   2600   2800   3300   3600   4100   4100   4400   4400   4400    230
+POST     batch                                                                                2700   3000   3200   3400   3700   3900   4200   4400   5000   5000   5000    219
+POST     interactive                                                                          2700   3400   3900   4200   4900   5400   5800   6000   6900   6900   6900    955
+--------|--------------------------------------------------------------------------------|--------|------|------|------|------|------|------|------|------|------|------|------
+         Aggregated                                                                           2600   3100   3500   3800   4600   5000   5700   5900   6900   6900   6900   1404
+
+# Summary: 1,404 requests, 0 failures, 7.8 req/s. 40 users stayed inside the
+# admission bound (48 = (16 queued + 8 running) x 2), so no sheds.
+# p99: interactive 6.0 s > batch 4.4 s > agent 4.1 s. Without class priority the
+# user-facing class has the worst tail (p99 spread interactive - batch = +1.6 s).
