@@ -1,0 +1,69 @@
+# Gateway load experiments - 29 September 2026, ~21:48-21:51 host time
+# Host: Lambda 1x H100 SXM5; two SGLang v0.5.20 workers (Qwen3-8B BF16) on 38,000 MiB
+# HAMi slices, max_running_requests=8 each. Release 9c82f16. Raw output pasted by user.
+# Tool: experiments/load.py run inside the gateway image, closed loop through the
+# gateway (http://gateway:8780/v1): shared ~1,100-token course prefix + unique
+# question per request, max_tokens=128.
+# Gateway settings (defaults): dispatch_concurrency_per_worker=2, queue_max_size=16
+# per worker, queue_timeout_s=5, kv_usage_limit=0.90.
+
+## Run A: CONCURRENCY=8, REQUESTS=100
+concurrency=8 requests=100 max_tokens=128 seconds=48.8
+outcomes={200: 100}
+ok_latency_s p50=3.88 p99=5.83 max=5.83
+
+## Run B: CONCURRENCY=64, REQUESTS=300
+concurrency=64 requests=300 max_tokens=128 seconds=6.2
+outcomes={503: 264, 200: 12, 504: 24}
+ok_latency_s p50=3.98 p99=5.95 max=5.95
+
+## Grafana "Course Assistant Engine and Queues" during A and B (screenshots by user)
+# - Engine running requests per worker: peak exactly 2 per worker.
+# - Engine queued requests per worker: 0 throughout.
+# - KV cache usage: ~0 %.
+# - Generated tokens/s per worker: peak ~115.
+# - Prefix cache hit rate: ~0.97 during the runs.
+# - Gateway sheds by reason: queue_full (503) and timeout_queue (504) appear in run B.
+# - TTFT p50 ~0.7 s, p99 ~0.8-1.0 s per worker (histogram_quantile over SGLang's
+#   bucket boundaries; treat as approximate).
+
+## Interpretation
+# The first limiter is the gateway's own dispatch cap (2 in-flight per worker), not
+# the GPU: engines never ran more than 2 requests, had an empty queue and ~0 % KV
+# while the gateway shed 96 % of run B (264 queue_full + 24 timeout_queue). With
+# 2 slots and ~2 s service time, 16 queued requests cannot clear a 5 s queue
+# deadline. Next: raise GATEWAY_DISPATCH_CONCURRENCY_PER_WORKER to 8 (= engine
+# max_running_requests) and repeat A and B.
+
+## Run B repeated (same settings): reproducible
+concurrency=64 requests=300 max_tokens=128 seconds=6.2
+outcomes={503: 264, 200: 12, 504: 24}
+ok_latency_s p50=3.99 p99=5.95 max=5.95
+
+## Config change: GATEWAY_DISPATCH_CONCURRENCY_PER_WORKER=8 (= engine max_running_requests)
+# Added to the host .env; gateway container recreated. (A first append was glued to
+# the previous line because .env lacked a final newline; the gateway then failed to
+# start and the load tool saw ConnectError. Fixed with sed before these runs.)
+
+## Run A': CONCURRENCY=8, REQUESTS=100
+concurrency=8 requests=100 max_tokens=128 seconds=14.9
+outcomes={200: 100}
+ok_latency_s p50=0.96 p99=2.08 max=2.08
+
+## Run B': CONCURRENCY=64, REQUESTS=300
+concurrency=64 requests=300 max_tokens=128 seconds=6.4
+outcomes={503: 252, 200: 48}
+ok_latency_s p50=4.12 p99=6.14 max=6.14
+
+## Comparison
+# A: 48.8 s -> 14.9 s (3.3x); p50 3.88 -> 0.96 s; p99 5.83 -> 2.08 s; all 200 in both.
+# B: completed 12 -> 48; timeout_queue 24 -> 0; queue_full 264 -> 252.
+# 48 = (16 queued + 8 dispatched) x 2 workers: the admission bound; everything
+# beyond it got an immediate 503 queue_full (with Retry-After) instead of waiting.
+# KV usage stayed ~0 %: ~1,100-token prompts with ~97 % prefix-cache hits are small.
+# Grafana "placements per worker" during B and B': worker-a received ~5x the
+# placements of worker-b (herding: least-loaded on metrics up to 5 s old, ties go to
+# the first worker). queue_full is raised after placement, so requests were shed on
+# a full worker-a queue while worker-b had room: queue depth must be part of the
+# placement score/eligibility, not only an admission input.
+# Screenshots: plots/grafana-2026-09-29/01-05*.png

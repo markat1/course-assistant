@@ -1,0 +1,214 @@
+# HAMi installation, GPU pod isolation and first SGLang workers - 29 September 2026
+# Provider: Lambda, 1x NVIDIA H100 80GB HBM3 (SXM5). Raw terminal output pasted by
+# the user; host name replaced with <gpu-host>. Releases: b3034d8, 3718172, 26e7154.
+
+## 1. Pinned SGLang image pulled into k3s containerd (background job)
+
+$ tail -3 ~/image-pull.log
+      └──config (3ec36384d5ea)                  complete        |++++++++++++++++++++++++++++++++++++++|
+application/vnd.oci.image.index.v1+json sha256:06e4f2ed21afde4ff513cda65070124e727ba23ccaeff7712b8c40e1097d611f
+Completed pull from OCI Registry (docker.io/lmsysorg/sglang:v0.5.20-cu130@sha256:06e4f2ed21afde4ff513cda65070124e727ba23ccaeff7712b8c40e1097d611f)      elapsed: 133.7s total:  14.0 G  (107.5 MiB/s)
+
+## 2. bash setup/install_hami.sh (release b3034d8)
+
+node/<gpu-host> labeled
+helmchart.helm.cattle.io/hami created
+deployment.apps/hami-scheduler condition met
+Waiting for deployment "hami-scheduler" rollout to finish: 0 of 1 updated replicas are available...
+deployment "hami-scheduler" successfully rolled out
+daemonset.apps/hami-device-plugin condition met
+daemon set "hami-device-plugin" successfully rolled out
+
+## 3. GPU registration by HAMi
+
+$ sudo k3s kubectl get node "$(hostname)" -o jsonpath='{.status.allocatable}'
+{"cpu":"26","ephemeral-storage":"2783741087814","hugepages-1Gi":"0","hugepages-2Mi":"0","memory":"231924648Ki","nvidia.com/gpu":"10","pods":"110"}
+
+$ sudo k3s kubectl get node "$(hostname)" -o jsonpath='{.metadata.annotations.hami\.io/node-nvidia-register}'
+[{"id":"GPU-fa52f70a-b38a-4105-e3bd-75cf654e7dc2","count":10,"devmem":81559,"devcore":100,"type":"NVIDIA H100 80GB HBM3","mode":"hami-core","health":true,"devicepairscore":{}}]
+
+## 4. bash setup/check_gpu_pod.sh (release 3718172)
+# Pod limits: nvidia.com/gpu: 1, nvidia.com/gpumem: 30000 (MiB).
+
+configmap/gpu-check created
+pod/gpu-check created
+pod/gpu-check condition met
+SGLang: 0.5.20
+Pytorch: 2.13.0+cu130
+CUDA runtime: 13.0
+GPU: NVIDIA H100 80GB HBM3
+GPU memory: 29.3 GiB
+Visible memory limit: 29.3 GiB
+PASS: CUDA allocation and BF16 matrix multiplication.
+pod "gpu-check" deleted from default namespace
+
+# Interpretation: 30000 MiB = 29.3 GiB visible instead of the full 79.2 GiB, in
+# both device properties and cudaMemGetInfo: HAMi's memory limit is enforced
+# inside the pod. Compute time is not limited by this test.
+
+## 5. First worker rollout: bash setup/deploy_workers.sh (release 26e7154)
+
+service/sglang created
+statefulset.apps/sglang created
+Waiting for statefulset spec update to be observed...
+Waiting for 2 pods to be ready...
+Waiting for 2 pods to be ready...
+Waiting for 1 pods to be ready...
+Waiting for 1 pods to be ready...
+Waiting for 2 pods to be ready...
+
+$ sudo k3s kubectl get pods -l app=sglang -o wide
+NAME       READY   STATUS    RESTARTS   AGE     IP           NODE         NOMINATED NODE   READINESS GATES
+sglang-0   0/1     Running   0          5m2s    10.42.0.11   <gpu-host>   <none>           <none>
+sglang-1   0/1     Running   0          2m49s   10.42.0.12   <gpu-host>   <none>           <none>
+
+$ sudo k3s kubectl describe pod sglang-0 | tail   (events only)
+  Normal   Scheduled         5m7s                   hami-scheduler  Successfully assigned default/sglang-0 to <gpu-host>
+  Normal   FilteringSucceed  5m8s                   hami-scheduler  find fit node(<gpu-host>), 0 nodes not fit, 1 nodes fit(<gpu-host>:0.00)
+  Normal   BindingSucceed    5m8s                   hami-scheduler  Successfully binding node [<gpu-host>] to default/sglang-0
+  Normal   Pulled            5m7s                   kubelet         spec.containers{sglang}: Container image "docker.io/lmsysorg/sglang:v0.5.20-cu130@sha256:06e4f2ed21afde4ff513cda65070124e727ba23ccaeff7712b8c40e1097d611f" already present on machine and can be accessed by the pod
+  Normal   Created           5m7s                   kubelet         spec.containers{sglang}: Container created
+  Normal   Started           5m7s                   kubelet         spec.containers{sglang}: Container started
+  Warning  Unhealthy         3m48s (x8 over 4m58s)  kubelet         spec.containers{sglang}: Startup probe failed: Get "http://10.42.0.11:8000/health": dial tcp 10.42.0.11:8000: connect: connection refused
+  Warning  Unhealthy         3m7s (x4 over 3m37s)   kubelet         spec.containers{sglang}: Startup probe failed: Get "http://10.42.0.11:8000/health": context deadline exceeded (Client.Timeout exceeded while awaiting headers)
+  Warning  Unhealthy         61s (x13 over 2m46s)   kubelet         spec.containers{sglang}: Readiness probe failed: Get "http://10.42.0.11:8000/health": context deadline exceeded (Client.Timeout exceeded while awaiting headers)
+
+$ sudo k3s kubectl logs sglang-0 --tail=40   (excerpt)
+[2026-09-29 18:12:06] INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+[2026-09-29 18:12:07] INFO:     127.0.0.1:59830 - "GET /model_info HTTP/1.1" 200 OK
+[2026-09-29 18:12:11] Prefill batch, #new-seq: 1, #new-token: 6, #cached-token: 0, token usage: 0.00, #running-req: 0, #queue-req: 0, #pending-token: 0, cuda graph: True, input throughput (token/s): 0.96
+[2026-09-29 18:12:12] INFO:     127.0.0.1:59834 - "POST /generate HTTP/1.1" 200 OK
+[2026-09-29 18:12:12] The server is fired up and ready to roll!
+[2026-09-29 18:12:14] Prefill batch, #new-seq: 1, #new-token: 1, #cached-token: 0, token usage: 0.00, #running-req: 0, #queue-req: 0, #pending-token: 0, cuda graph: False, input throughput (token/s): 0.33
+[2026-09-29 18:12:24] Prefill batch, #new-seq: 1, #new-token: 1, #cached-token: 0, token usage: 0.00, #running-req: 0, #queue-req: 0, #pending-token: 0, cuda graph: False, input throughput (token/s): 0.10
+[2026-09-29 18:12:55] INFO:     10.42.0.1:40832 - "GET /health HTTP/1.1" 200 OK
+[2026-09-29 18:12:56] INFO:     10.42.0.1:40836 - "GET /health HTTP/1.1" 200 OK
+[2026-09-29 18:14:41] INFO:     10.42.0.1:42506 - "GET /health HTTP/1.1" 200 OK
+[2026-09-29 18:15:11] INFO:     10.42.0.1:47990 - "GET /health HTTP/1.1" 200 OK
+# (one-token prefill lines repeat every ~10 s, one per probe)
+
+# Interpretation: SGLang started, completed its own warmup generation and never
+# restarted. Each /health probe runs a one-token generation; Kubernetes' default
+# 1 s probe timeout was usually exceeded ("context deadline exceeded"), so
+# readiness flapped. Fix in c05eb25: timeoutSeconds: 10 on both probes.
+# Result of the corrected rollout: pending.
+
+## 6. Corrected rollout (release c05eb25, probe timeoutSeconds 10)
+# The StatefulSet did not replace pods that had never become Ready, so the old
+# pods (1 s probe) were deleted manually; the controller recreated them.
+
+$ for i in 1 2 3; do curl -s -o /dev/null -m 30 -w "%{http_code} %{time_total}s\n" http://<pod-ip>:8000/health; done
+200 1.001501s
+200 1.001430s
+200 1.000407s
+# /health takes ~1.0 s (a one-token generation), just above the default 1 s timeout.
+
+$ sudo k3s kubectl delete pod sglang-0 sglang-1
+$ bash setup/deploy_workers.sh
+statefulset.apps/sglang configured
+Waiting for 2 pods to be ready...
+Waiting for 1 pods to be ready...
+Waiting for 1 pods to be ready...
+partitioned roll out complete: 2 new pods have been updated...
+NAME       READY   STATUS    RESTARTS   AGE     NODE
+sglang-0   1/1     Running   0          2m46s   <gpu-host>
+sglang-1   1/1     Running   0          83s     <gpu-host>
+
+## 7. SGLang startup log, sglang-0 (KV capacity for Part 1)
+
+[2026-09-29 18:33:33] Load weight begin. avail mem=36.60 GB
+[2026-09-29 18:33:35] Load weight end. elapsed=2.51 s, type=Qwen3ForCausalLM, avail mem=21.32 GB, mem usage=15.28 GB.
+[2026-09-29 18:33:36] KV Cache is allocated. dtype: torch.bfloat16, #tokens: 115299, K size: 7.92 GB, V size: 7.92 GB
+[2026-09-29 18:33:36] Memory pool end. avail mem=5.43 GB
+[2026-09-29 18:33:37] Capture target prefill CUDA graph begin. backend=breakable, num_tokens=[4, ..., 2048], avail mem=5.32 GB
+[2026-09-29 18:34:02] Capture target prefill CUDA graph end. elapsed=25.58 s, mem usage=0.30 GB, avail mem=5.02 GB.
+[2026-09-29 18:34:02] Capture target decode CUDA graph begin. backend=full, num_tokens_per_req=1, bs=[1, 2, 4, 8], avail mem=5.02 GB
+[2026-09-29 18:34:03] Capture target decode CUDA graph end. elapsed=1.30 s, mem usage=0.00 GB, avail mem=5.02 GB.
+[2026-09-29 18:34:03] max_total_num_tokens=115299, chunked_prefill_size=2048, max_prefill_tokens=16384, max_running_requests=8, context_len=8192, available_gpu_mem=5.02 GB
+
+# Derived: (7.92 + 7.92) GiB / 115299 tokens = ~147.5 KB/token, matching the paper
+# value 2 x 36 layers x 8 KV heads x 128 dim x 2 bytes = 147,456 B (144 KiB).
+# 115299 / 8192 = ~14 full-context sequences per worker; max_running_requests=8
+# is therefore the first concurrency limit, before KV.
+
+## 8. NodePort services and Compose stack on the host (release b34c594)
+
+$ bash setup/deploy_workers.sh
+service/sglang unchanged
+statefulset.apps/sglang configured
+service/worker-a created
+service/worker-b created
+NAME       READY   STATUS    RESTARTS   AGE
+sglang-0   1/1     Running   0          7m15s
+sglang-1   1/1     Running   0          5m52s
+
+$ curl -s localhost:30001/v1/models; curl -s localhost:30002/v1/models
+{"object":"list","data":[{"id":"Qwen/Qwen3-8B","object":"model","created":1790707218,"owned_by":"sglang","root":"Qwen/Qwen3-8B","parent":null,"max_model_len":8192}]}
+{"object":"list","data":[{"id":"Qwen/Qwen3-8B","object":"model","created":1790707218,"owned_by":"sglang","root":"Qwen/Qwen3-8B","parent":null,"max_model_len":8192}]}
+
+$ curl -s localhost:30001/metrics > ~/sglang-metrics-worker-a.prom && grep -E "^sglang[:_](num_running_reqs|num_queue_reqs|token_usage|full_token_usage)" ~/sglang-metrics-worker-a.prom
+sglang:num_running_reqs{engine_type="unified",model_name="Qwen/Qwen3-8B",moe_ep_rank="0",pp_rank="0",tp_rank="0"} 0.0
+sglang:num_queue_reqs{engine_type="unified",model_name="Qwen/Qwen3-8B",moe_ep_rank="0",pp_rank="0",tp_rank="0"} 0.0
+sglang:token_usage{engine_type="unified",model_name="Qwen/Qwen3-8B",moe_ep_rank="0",pp_rank="0",tp_rank="0"} 0.0
+sglang:full_token_usage{engine_type="unified",model_name="Qwen/Qwen3-8B",moe_ep_rank="0",pp_rank="0",tp_rank="0"} 0.0
+# Prefix is "sglang:" (colon) in v0.5.20; one series per metric. The gateway's
+# SGLANG_METRIC_FIELDS (num_running_reqs, num_queue_reqs, full_token_usage) parse
+# these lines to engine_running=0 engine_waiting=0 kv_cache_usage_ratio=0.0
+# (checked locally with gateway.monitoring.parser).
+
+$ sudo docker compose -p course-assistant -f compose.yaml -f compose.monitoring.yaml -f compose.k3s.yaml -f compose.app.yaml -f compose.ui.yaml up -d --build
+ ✔ Container course-assistant-prometheus-1     Started
+ ✔ Container course-assistant-gateway-1        Started
+ ✔ Container course-assistant-grafana-1        Started
+ ✔ Container course-assistant-app-1            Started
+ ✔ Container course-assistant-open-webui-1     Started
+
+$ sudo docker compose -p course-assistant logs gateway   (excerpt)
+2026-09-29 18:43:37,201 INFO httpx HTTP Request: GET http://host.docker.internal:30001/health "HTTP/1.1 200 OK"
+2026-09-29 18:43:37,202 INFO httpx HTTP Request: GET http://host.docker.internal:30002/health "HTTP/1.1 200 OK"
+2026-09-29 18:43:37,203 INFO httpx HTTP Request: GET http://host.docker.internal:30001/v1/models "HTTP/1.1 200 OK"
+2026-09-29 18:43:37,204 INFO httpx HTTP Request: GET http://host.docker.internal:30002/v1/models "HTTP/1.1 200 OK"
+2026-09-29 18:44:14,240 INFO httpx HTTP Request: GET http://host.docker.internal:30001/metrics "HTTP/1.1 200 OK"
+2026-09-29 18:44:14,261 INFO httpx HTTP Request: GET http://host.docker.internal:30002/metrics "HTTP/1.1 200 OK"
+INFO:     172.18.0.2:55124 - "GET /metrics HTTP/1.1" 200 OK
+# (worker metrics polled every 5 s; Prometheus scrapes the gateway)
+
+## 9. FIRST COMPLETION THROUGH THE GATEWAY (serve path -> k3s -> SGLang on a HAMi slice)
+
+$ curl -s localhost:8780/v1/chat/completions -H 'Content-Type: application/json' -d '{"model":"Qwen/Qwen3-8B","messages":[{"role":"user","content":"Explain the KV cache in one sentence."}],"max_tokens":64}'
+{"id":"fc689d43e0044744a4d1a9eab9578fb8","object":"chat.completion","created":1790707496,"model":"Qwen/Qwen3-8B","choices":[{"index":0,"message":{"role":"assistant","content":"The KV cache stores the keys and values of previously computed attention layers to improve the efficiency of sequence generation in transformer models.","reasoning_content":null,"tool_calls":null},"logprobs":null,"finish_reason":"stop","matched_stop":151645}],"usage":{"prompt_tokens":21,"total_tokens":46,"completion_tokens":25,"prompt_tokens_details":null,"reasoning_tokens":0},"metadata":{"weight_version":"default","weight_versions":[{"version":"default","start":0,"end":25}]}}
+# Admission only accepts ready workers with fresh metrics, so at least one worker
+# had passed the gateway's prepare_worker (health, model, warmup, metrics).
+
+## 10. Live scrape: Prometheus targets
+
+$ curl -s localhost:19090/api/v1/targets | python3 -c "...print job, worker, health..."
+gateway - up
+prometheus - up
+sglang worker-a up
+sglang worker-b up
+
+## 11. First application turn through the serve path (app -> gateway -> SGLang)
+
+$ curl -s localhost:8781/v1/chat/completions -H 'Content-Type: application/json' -d '{"model":"course-assistant","messages":[{"role":"user","content":"How does KV cache size limit concurrent requests?"}]}'
+{"id":"chatcmpl-bb59f40bf6314d669e39f06b57a8ac2e","choices":[{"finish_reason":"stop","index":0,"message":{"content":"The question you're asking relates to the concept of KV (Key-Value) cache size and its impact on concurrent requests. This is a technical topic that involves understanding how caching mechanisms manage memory and resource allocation for multiple simultaneous requests.\n\nSince this is a specific technical question that involves understanding the internal workings of a caching system, I recommend reaching out to the **Course Tutor** for a detailed explanation and guidance tailored to your course. They can provide you with the most accurate and relevant information.\n\nWould you like me to transfer you to the Course Tutor?","role":"assistant"}}],"created":1790707531,"model":"course-assistant","object":"chat.completion"}
+# The app turn reached the engine through the gateway, but the Router answered
+# in text instead of calling the handoff tool, so Tutor and lookup_course were
+# not exercised. Diagnosis pending: tool-call parsing vs. Router instructions.
+
+## 12. Tool-call diagnosis: SGLang qwen25 parser through the gateway
+
+$ curl -s localhost:8780/v1/chat/completions ... "tools":[{"type":"function","function":{"name":"get_weather",...}}] ...
+{"id":"995acb507d4046f4819f7918169705f1","object":"chat.completion","created":1790707580,"model":"Qwen/Qwen3-8B","choices":[{"index":0,"message":{"role":"assistant","content":"","reasoning_content":null,"tool_calls":[{"id":"call_237b8d6d2536487e82ecdbbb","index":0,"type":"function","function":{"name":"get_weather","arguments":"{\"city\": \"Copenhagen\"}"}}]},"logprobs":null,"finish_reason":"tool_calls","matched_stop":null}],"usage":{"prompt_tokens":168,"total_tokens":189,"completion_tokens":21,"prompt_tokens_details":null,"reasoning_tokens":0},"metadata":{"weight_version":"default","weight_versions":[{"version":"default","start":0,"end":21}]}}
+# Structured tool calls work end to end; the failed handoff in section 11 was
+# the Router's instructions, not the engine. Fix (commit on 15acb64): Router
+# instructions wrapped in the SDK's prompt_with_handoff_instructions and naming
+# transfer_to_course_tutor explicitly, forbidding asking for permission.
+
+## 13. Full agent turn after the Router fix (release 15acb64)
+# Path: app -> Router -> handoff -> Tutor -> lookup_course -> gateway -> SGLang
+
+$ curl -s localhost:8781/v1/chat/completions -H 'Content-Type: application/json' -d '{"model":"course-assistant","messages":[{"role":"user","content":"How does KV cache size limit concurrent requests?"}]}'
+{"id":"chatcmpl-6ed4452c81af4db6b99e655ddc84ac6f","choices":[{"finish_reason":"stop","index":0,"message":{"content":"The KV cache size limits the number of concurrent requests because it determines how much memory is available to store the keys and values for the attention mechanism during inference. Each sequence in a request consumes memory in the KV cache, and the total memory required depends on the sequence length and the number of tokens.\n\nFor example, if the available KV memory is 1000 MB, and each token requires 10 MB of memory, then the maximum number of tokens that can be stored in the KV cache is 100 tokens. If a request has a sequence length of 50 tokens, then the KV cache can handle two such requests concurrently, assuming no other memory is used for model weights and activations.\n\nThis calculation helps in estimating how many sequences can be processed at the same time, given the available memory. The actual number of concurrent requests may be further limited by the configured maximum length and the actual lengths of the sequences in the application.\n\nThe passage titled \"KV memory and concurrency capacity\" provides the basis for this explanation. \n\nNow, can you explain what the KV cache is and how it is used in the context of inference?","role":"assistant"}}],"created":1790707845,"model":"course-assistant","object":"chat.completion"}
+# The answer cites the corpus passage title "KV memory and concurrency capacity"
+# (only reachable via lookup_course) and ends with the Tutor's check question.

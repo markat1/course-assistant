@@ -1,0 +1,68 @@
+# H100 host probe - 28 September 2026
+# Provider: Lambda, 1x NVIDIA H100 PCIe. Raw terminal output pasted by the user.
+# Host name and public IP replaced with <gpu-host>. Release directory: commit 827d1d5.
+# Output of the image pull is truncated to its final lines.
+
+## 1. Pinned SGLang image + CUDA/BF16 container probe (setup/check_gpu_container.py)
+
+4f4fb700ef54 Pull complete 0B
+ade5cd857924 Pull complete 0B
+Image lmsysorg/sglang:v0.5.20-cu130@sha256:06e4f2ed21afde4ff513cda65070124e727ba23ccaeff7712b8c40e1097d611f Pulled
+Container course-assistant-worker-a-run-cc149be8e1a0 Creating
+Container course-assistant-worker-a-run-cc149be8e1a0 Created
+SGLang: 0.5.20
+Pytorch: 2.13.0+cu130
+CUDA runtime: 13.0
+GPU: NVIDIA H100 PCIe
+GPU memory: 79.2 GiB
+PASS: CUDA allocation and BF16 matrix multiplication.
+
+## 2. NVIDIA container runtime
+
+$ command -v nvidia-container-runtime
+/usr/bin/nvidia-container-runtime
+$ nvidia-container-runtime --version
+NVIDIA Container Runtime version 1.18.1
+spec: 1.3.0
+
+runc version 1.3.4
+commit: v1.3.4-0-gd6d73eb8
+spec: 1.2.1
+go: go1.24.11
+libseccomp: 2.5.3
+
+## 3. Manual k3s installation (same flags as cluster/k3s/config.yaml)
+
+$ command -v k3s
+$ command -v helm
+$ curl -fL 'https://raw.githubusercontent.com/k3s-io/k3s/v1.35.8+k3s1/install.sh' -o /tmp/course-k3s-install.sh
+100 36465  100 36465    0     0   119k      0 --:--:-- --:--:-- --:--:--  120k
+$ sudo env INSTALL_K3S_VERSION='v1.35.8+k3s1' sh /tmp/course-k3s-install.sh server --disable=traefik --disable=servicelb --write-kubeconfig-mode=600
+[INFO]  Using v1.35.8+k3s1 as release
+[INFO]  Downloading hash https://github.com/k3s-io/k3s/releases/download/v1.35.8+k3s1/sha256sum-amd64.txt
+[INFO]  Downloading binary https://github.com/k3s-io/k3s/releases/download/v1.35.8+k3s1/k3s
+[INFO]  Verifying binary download
+[INFO]  Installing k3s to /usr/local/bin/k3s
+[INFO]  Skipping installation of SELinux RPM
+[INFO]  Creating /usr/local/bin/kubectl symlink to k3s
+[INFO]  Creating /usr/local/bin/crictl symlink to k3s
+[INFO]  Skipping /usr/local/bin/ctr symlink to k3s, command exists in PATH at /usr/bin/ctr
+[INFO]  Creating killall script /usr/local/bin/k3s-killall.sh
+[INFO]  Creating uninstall script /usr/local/bin/k3s-uninstall.sh
+[INFO]  env: Creating environment file /etc/systemd/system/k3s.service.env
+[INFO]  systemd: Creating service file /etc/systemd/system/k3s.service
+[INFO]  systemd: Enabling k3s unit
+Created symlink /etc/systemd/system/multi-user.target.wants/k3s.service -> /etc/systemd/system/k3s.service.
+[INFO]  systemd: Starting k3s
+
+$ sudo k3s kubectl get nodes -o wide
+NAME         STATUS   ROLES           AGE   VERSION        INTERNAL-IP     EXTERNAL-IP   OS-IMAGE             KERNEL-VERSION      CONTAINER-RUNTIME
+<gpu-host>   Ready    control-plane   62s   v1.35.8+k3s1   172.29.150.94   <none>        Ubuntu 22.04.5 LTS   6.8.0-1046-nvidia   containerd://2.2.7-k3s1
+
+$ sudo k3s kubectl get runtimeclass nvidia
+NAME     HANDLER   AGE
+nvidia   nvidia    61s
+
+# Not shown in this capture: nvidia-smi driver line (HANDOFF records 580.105.08),
+# Docker 29.2.1 and Compose v5.1.0 from setup/check_gpu_host.sh.
+# No SGLang server, model download or completion was run on this host.

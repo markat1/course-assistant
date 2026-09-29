@@ -1,0 +1,177 @@
+# Cold vs warm first-token latency - 29 September 2026
+# Host: Lambda 1x H100 80GB HBM3 (SXM5), two SGLang v0.5.20 workers (Qwen3-8B BF16)
+# on 38,000 MiB HAMi slices. Release 34e6b32. Raw output pasted by the user.
+#
+# Method: experiments/first_token.py, run inside the gateway image (httpx), sends 6
+# sequential chat requests directly to one worker's NodePort. Each request has the
+# same ~1,650-token system prefix (a course passage repeated 40x, synthetic but
+# app-shaped: shared prefix + unique question) and a different question.
+# max_tokens=1, so the latency is prefill + first token: our TTFT proxy. The gateway
+# path cannot be used for this because it does not stream and cannot target a
+# specific worker. Measured client-side, includes HTTP overhead on the host.
+#
+# Cold replica: sglang-1 deleted, recreated, measured right after Kubernetes Ready.
+# Before our run, sglang-1 had only served SGLang's own startup warmup (6 tokens),
+# health probes (1 token) and the gateway's warmup (64 tokens); never our prefix.
+
+## worker-b (sglang-1, freshly restarted)
+
+$ sudo k3s kubectl delete pod sglang-1 && sleep 5 && sudo k3s kubectl wait --for=condition=Ready pod/sglang-1 --timeout=600s
+pod "sglang-1" deleted from default namespace
+pod/sglang-1 condition met
+
+$ sudo k3s kubectl logs sglang-1 | grep "Prefill batch" | tail -8   (before the run)
+[2026-09-29 19:08:27] Prefill batch, #new-seq: 1, #new-token: 6, #cached-token: 0, ... cuda graph: True
+[2026-09-29 19:08:32] Prefill batch, #new-seq: 1, #new-token: 1, #cached-token: 0, ... cuda graph: False
+[2026-09-29 19:08:33] Prefill batch, #new-seq: 1, #new-token: 1, #cached-token: 0, ... cuda graph: False
+[2026-09-29 19:08:36] Prefill batch, #new-seq: 1, #new-token: 1, #cached-token: 0, ... cuda graph: False
+[2026-09-29 19:08:37] Prefill batch, #new-seq: 1, #new-token: 64, #cached-token: 0, ... cuda graph: True
+[2026-09-29 19:08:43] Prefill batch, #new-seq: 1, #new-token: 1, #cached-token: 0, ... cuda graph: False
+
+$ ... run ... TARGET_URL=http://host.docker.internal:30002/v1 ... < experiments/first_token.py
+target=http://host.docker.internal:30002/v1 model=Qwen/Qwen3-8B runs=6
+run1 seconds=0.054 prompt_tokens=1673
+run2 seconds=0.098 prompt_tokens=1671
+run3 seconds=0.015 prompt_tokens=1672
+run4 seconds=0.016 prompt_tokens=1673
+run5 seconds=0.017 prompt_tokens=1674
+run6 seconds=0.016 prompt_tokens=1674
+
+$ sudo k3s kubectl logs sglang-1 | grep "Prefill batch" | tail -8
+[2026-09-29 19:09:30] Prefill batch, #new-seq: 1, #new-token: 1668, #cached-token: 5, token usage: 0.00, #running-req: 0, #queue-req: 0, #pending-token: 0, cuda graph: True, input throughput (token/s): 227.58
+[2026-09-29 19:09:30] Prefill batch, #new-seq: 1, #new-token: 15, #cached-token: 1656, token usage: 0.00, #running-req: 0, #queue-req: 0, #pending-token: 0, cuda graph: True, input throughput (token/s): 152.63
+[2026-09-29 19:09:30] Prefill batch, #new-seq: 1, #new-token: 16, #cached-token: 1656, token usage: 0.00, #running-req: 0, #queue-req: 0, #pending-token: 0, cuda graph: True, input throughput (token/s): 1041.81
+[2026-09-29 19:09:30] Prefill batch, #new-seq: 1, #new-token: 15, #cached-token: 1658, token usage: 0.00, #running-req: 0, #queue-req: 0, #pending-token: 0, cuda graph: True, input throughput (token/s): 929.84
+[2026-09-29 19:09:30] Prefill batch, #new-seq: 1, #new-token: 17, #cached-token: 1657, token usage: 0.00, #running-req: 0, #queue-req: 0, #pending-token: 0, cuda graph: True, input throughput (token/s): 1018.19
+[2026-09-29 19:09:30] Prefill batch, #new-seq: 1, #new-token: 17, #cached-token: 1657, token usage: 0.00, #running-req: 0, #queue-req: 0, #pending-token: 0, cuda graph: True, input throughput (token/s): 1088.30
+[2026-09-29 19:09:33] Prefill batch, #new-seq: 1, #new-token: 1, #cached-token: 0, ... (health probe)
+[2026-09-29 19:09:43] Prefill batch, #new-seq: 1, #new-token: 1, #cached-token: 0, ... (health probe)
+
+## worker-a (sglang-0, running since 18:33, had served real app/agent turns) - control
+
+$ ... run ... TARGET_URL=http://host.docker.internal:30001/v1 ... < experiments/first_token.py
+target=http://host.docker.internal:30001/v1 model=Qwen/Qwen3-8B runs=6
+run1 seconds=0.054 prompt_tokens=1673
+run2 seconds=0.016 prompt_tokens=1671
+run3 seconds=0.017 prompt_tokens=1672
+run4 seconds=0.016 prompt_tokens=1673
+run5 seconds=0.016 prompt_tokens=1674
+run6 seconds=0.016 prompt_tokens=1674
+
+## Summary (n = 1 cold restart so far)
+# Cold prefix (1668 new tokens): 54 ms on both workers.
+# Warm prefix (~1657 cached, 15-17 new): 15-17 ms, ~3.4x faster. Radix cache reuse ~99%.
+# Freshly restarted worker-b: first prefix-HIT request 98 ms (~6x warm); the older
+# worker-a showed no such outlier. Hypothesis: first execution of the prefix-reuse
+# (extend) path on a new replica carries a one-time cost that SGLang's own startup
+# warmup does not cover. To be confirmed with more restarts.
+
+## Repeat rounds on worker-b (fresh restart each round)
+
+### Round 2
+$ sudo k3s kubectl delete pod sglang-1 && sleep 5 && sudo k3s kubectl wait --for=condition=Ready pod/sglang-1 --timeout=600s && ... first_token.py ... && sudo k3s kubectl logs sglang-1 | grep "Prefill batch" | grep -v "new-token: 1," | tail -6
+pod "sglang-1" deleted from default namespace
+pod/sglang-1 condition met
+target=http://host.docker.internal:30002/v1 model=Qwen/Qwen3-8B runs=6
+run1 seconds=0.072 prompt_tokens=1673
+run2 seconds=0.016 prompt_tokens=1671
+run3 seconds=0.016 prompt_tokens=1672
+run4 seconds=0.099 prompt_tokens=1673
+run5 seconds=0.017 prompt_tokens=1674
+run6 seconds=0.015 prompt_tokens=1674
+[2026-09-29 19:13:57] Prefill batch, #new-seq: 1, #new-token: 1673, #cached-token: 0, token usage: 0.00, #running-req: 0, #queue-req: 0, #pending-token: 0, cuda graph: True, input throughput (token/s): 881.72
+[2026-09-29 19:13:57] Prefill batch, #new-seq: 1, #new-token: 15, #cached-token: 1656, token usage: 0.00, #running-req: 0, #queue-req: 0, #pending-token: 0, cuda graph: True, input throughput (token/s): 897.66
+[2026-09-29 19:13:57] Prefill batch, #new-seq: 1, #new-token: 16, #cached-token: 1656, token usage: 0.00, #running-req: 0, #queue-req: 0, #pending-token: 0, cuda graph: True, input throughput (token/s): 994.86
+[2026-09-29 19:13:57] Prefill batch, #new-seq: 1, #new-token: 15, #cached-token: 1658, token usage: 0.00, #running-req: 0, #queue-req: 0, #pending-token: 0, cuda graph: True, input throughput (token/s): 152.44
+[2026-09-29 19:13:57] Prefill batch, #new-seq: 1, #new-token: 17, #cached-token: 1657, token usage: 0.00, #running-req: 0, #queue-req: 0, #pending-token: 0, cuda graph: True, input throughput (token/s): 1022.89
+[2026-09-29 19:13:57] Prefill batch, #new-seq: 1, #new-token: 17, #cached-token: 1657, token usage: 0.00, #running-req: 0, #queue-req: 0, #pending-token: 0, cuda graph: True, input throughput (token/s): 1092.19
+
+### Round 3
+pod "sglang-1" deleted from default namespace
+pod/sglang-1 condition met
+target=http://host.docker.internal:30002/v1 model=Qwen/Qwen3-8B runs=6
+run1 seconds=0.073 prompt_tokens=1673
+run2 seconds=0.017 prompt_tokens=1671
+run3 seconds=0.015 prompt_tokens=1672
+run4 seconds=0.103 prompt_tokens=1673
+run5 seconds=0.016 prompt_tokens=1674
+run6 seconds=0.016 prompt_tokens=1674
+[2026-09-29 19:19:44] Prefill batch, #new-seq: 1, #new-token: 1673, #cached-token: 0, token usage: 0.00, #running-req: 0, #queue-req: 0, #pending-token: 0, cuda graph: True, input throughput (token/s): 891.40
+[2026-09-29 19:19:44] Prefill batch, #new-seq: 1, #new-token: 15, #cached-token: 1656, token usage: 0.00, #running-req: 0, #queue-req: 0, #pending-token: 0, cuda graph: True, input throughput (token/s): 848.22
+[2026-09-29 19:19:44] Prefill batch, #new-seq: 1, #new-token: 16, #cached-token: 1656, token usage: 0.00, #running-req: 0, #queue-req: 0, #pending-token: 0, cuda graph: True, input throughput (token/s): 1018.10
+[2026-09-29 19:19:44] Prefill batch, #new-seq: 1, #new-token: 15, #cached-token: 1658, token usage: 0.00, #running-req: 0, #queue-req: 0, #pending-token: 0, cuda graph: True, input throughput (token/s): 147.24
+[2026-09-29 19:19:44] Prefill batch, #new-seq: 1, #new-token: 17, #cached-token: 1657, token usage: 0.00, #running-req: 0, #queue-req: 0, #pending-token: 0, cuda graph: True, input throughput (token/s): 1087.54
+[2026-09-29 19:19:44] Prefill batch, #new-seq: 1, #new-token: 17, #cached-token: 1657, token usage: 0.00, #running-req: 0, #queue-req: 0, #pending-token: 0, cuda graph: True, input throughput (token/s): 1028.07
+
+## Summary after 3 fresh restarts (supersedes the n=1 summary above)
+# Cold shared prefix (0-5 cached, ~1670 new): 54, 72, 73 ms.
+# Warm (1656-1658 cached, 15-17 new): 15-17 ms. Cold/warm = 3.4-4.5x.
+# Each fresh replica had exactly ONE warm request at ~100 ms (98, 99, 103 ms; log
+# throughput ~150 tok/s vs ~1000). Round 1: the first cache hit; rounds 2-3: the
+# fourth request (15 new / 1658 cached). The older worker-a control (6 requests)
+# had none. The earlier "first cache hit is slow" hypothesis is rejected as stated;
+# a one-time cost on a fresh replica remains plausible, trigger unknown.
+# Discriminating run pending: RUNS=20 on a fresh worker-b vs worker-a.
+
+## Discriminating run: RUNS=20 (questions cycle every 6, so runs 7-20 repeat
+## whole prompts that are then fully cached)
+
+### Fresh worker-b (round 4 restart)
+pod "sglang-1" deleted from default namespace
+pod/sglang-1 condition met
+target=http://host.docker.internal:30002/v1 model=Qwen/Qwen3-8B runs=20
+run1 seconds=0.072 prompt_tokens=1673
+run2 seconds=0.016 prompt_tokens=1671
+run3 seconds=0.016 prompt_tokens=1672
+run4 seconds=0.098 prompt_tokens=1673
+run5 seconds=0.016 prompt_tokens=1674
+run6 seconds=0.016 prompt_tokens=1674
+run7 seconds=0.025 prompt_tokens=1673
+run8 seconds=0.025 prompt_tokens=1671
+run9 seconds=0.024 prompt_tokens=1672
+run10 seconds=0.024 prompt_tokens=1673
+run11 seconds=0.024 prompt_tokens=1674
+run12 seconds=0.025 prompt_tokens=1674
+run13 seconds=0.029 prompt_tokens=1673
+run14 seconds=0.029 prompt_tokens=1671
+run15 seconds=0.030 prompt_tokens=1672
+run16 seconds=0.024 prompt_tokens=1673
+run17 seconds=0.024 prompt_tokens=1674
+run18 seconds=0.024 prompt_tokens=1674
+run19 seconds=0.024 prompt_tokens=1673
+run20 seconds=0.024 prompt_tokens=1671
+
+### Older worker-a (no restart; had already seen these prompts)
+target=http://host.docker.internal:30001/v1 model=Qwen/Qwen3-8B runs=20
+run1 seconds=0.033 prompt_tokens=1673
+run2 seconds=0.027 prompt_tokens=1671
+run3 seconds=0.026 prompt_tokens=1672
+run4 seconds=0.025 prompt_tokens=1673
+run5 seconds=0.026 prompt_tokens=1674
+run6 seconds=0.026 prompt_tokens=1674
+run7 seconds=0.024 prompt_tokens=1673
+run8 seconds=0.024 prompt_tokens=1671
+run9 seconds=0.024 prompt_tokens=1672
+run10 seconds=0.024 prompt_tokens=1673
+run11 seconds=0.024 prompt_tokens=1674
+run12 seconds=0.024 prompt_tokens=1674
+run13 seconds=0.024 prompt_tokens=1673
+run14 seconds=0.024 prompt_tokens=1671
+run15 seconds=0.024 prompt_tokens=1672
+run16 seconds=0.024 prompt_tokens=1673
+run17 seconds=0.024 prompt_tokens=1674
+run18 seconds=0.024 prompt_tokens=1674
+run19 seconds=0.024 prompt_tokens=1673
+run20 seconds=0.024 prompt_tokens=1671
+
+## Final summary (4 fresh restarts + 26 requests on the older replica)
+# - Cold shared prefix: 54, 72, 73, 72 ms. Warm (prefix cached, new question):
+#   15-17 ms. Cold/warm = 3.4-4.5x.
+# - Fresh replica: exactly one ~100 ms request (98, 99, 103, 98 ms) in every
+#   restart, 4/4; in 3/4 it was request 4. Never more than one in 20 requests.
+# - Older replica: 0 outliers in 26 requests. Random 1-in-6 noise would predict
+#   ~3-4. Conclusion: a one-time cost on a fresh replica, not noise. Mechanism
+#   not established (candidate: first-time kernel selection for a new shape).
+# - Fully cached repeats (runs 7-20) took 24-30 ms, more than the 15-17 ms of
+#   15-token extends; SGLang logs 1-token prefills with "cuda graph: False"
+#   (smallest prefill graph is 4 tokens) - a likely but unverified explanation.

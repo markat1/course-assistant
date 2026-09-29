@@ -1,0 +1,53 @@
+# Fresh-host k3s installation - 29 September 2026
+# Provider: Lambda, 1x NVIDIA H100 80GB HBM3 (SXM5). H100 PCIe was unavailable.
+# First run of setup/install_k3s.sh on a fresh host, release c54512d.
+# Raw terminal output pasted by the user; host name and public IP replaced with <gpu-host>.
+
+## setup/check_gpu_host.sh
+
+GPU and driver
+name, memory.total [MiB], driver_version
+NVIDIA H100 80GB HBM3, 81559 MiB, 580.105.08
+Docker server
+
+permission denied while trying to connect to the docker API at unix:///var/run/docker.sock
+
+# Note: on the fresh host the ubuntu user is not in the docker group, so the
+# script stopped (set -e) before the Compose line. Docker is not used in the
+# k3s path; the image is pulled directly into k3s containerd.
+
+## bash setup/install_k3s.sh
+
+[INFO]  Using v1.35.8+k3s1 as release
+[INFO]  Downloading hash https://github.com/k3s-io/k3s/releases/download/v1.35.8+k3s1/sha256sum-amd64.txt
+[INFO]  Downloading binary https://github.com/k3s-io/k3s/releases/download/v1.35.8+k3s1/k3s
+[INFO]  Verifying binary download
+[INFO]  Installing k3s to /usr/local/bin/k3s
+[INFO]  systemd: Starting k3s
+error: no matching resources found
+node/<gpu-host> condition met
+NAME         STATUS   ROLES           AGE   VERSION        INTERNAL-IP     EXTERNAL-IP   OS-IMAGE             KERNEL-VERSION      CONTAINER-RUNTIME
+<gpu-host>   Ready    control-plane   2s    v1.35.8+k3s1   172.26.133.27   <none>        Ubuntu 22.04.5 LTS   6.8.0-1046-nvidia   containerd://2.2.7-k3s1
+Error from server (NotFound): runtimeclasses.node.k8s.io "nvidia" not found
+
+# Interpretation: the bounded node wait retried once ("no matching resources
+# found") and then succeeded - verified on a fresh host. The final RuntimeClass
+# check ran 2 s after node registration, before k3s had applied its built-in
+# runtime manifests: a race in the installer, not a cluster fault (see below).
+
+## Follow-up checks (about 98 s after startup)
+
+$ sudo k3s kubectl get runtimeclass nvidia
+NAME     HANDLER   AGE
+nvidia   nvidia    98s
+
+$ sudo grep -n -A4 nvidia /var/lib/rancher/k3s/agent/etc/containerd/config.toml
+51:[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.'nvidia']
+52-  runtime_type = "io.containerd.runc.v2"
+53-
+54:[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.'nvidia'.options]
+55:  BinaryName = "/usr/bin/nvidia-container-runtime"
+56-  SystemdCgroup = true
+
+# The nvidia RuntimeClass maps to a containerd handler that executes the NVIDIA
+# container runtime. Actual GPU access from a pod is still to be proven.

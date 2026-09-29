@@ -1,0 +1,10 @@
+services:
+  locust:
+    image: locustio/locust:2.46.6
+    command: -f /mnt/experiments/locustfile.py --host http://gateway:8780
+    volumes:
+      - ./experiments:/mnt/experiments:ro
+    ports:
+      - "127.0.0.1:8089:8089"
+    depends_on:
+      - gateway

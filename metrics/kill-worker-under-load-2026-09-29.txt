@@ -1,0 +1,77 @@
+# Worker failure under load - 29 September 2026, ~22:02-22:04 host time
+# Release 9c82f16, gateway dispatch_concurrency_per_worker=8. Raw output pasted by user.
+# While experiments/load.py ran (8 concurrent, 800 requests, closed loop), sglang-1
+# (worker-b) was deleted 10 s after start; Kubernetes recreates it.
+
+$ (sleep 10 && sudo k3s kubectl delete pod sglang-1 --wait=false) & sudo docker compose ... run ... -e CONCURRENCY=8 -e REQUESTS=800 ... < experiments/load.py
+pod "sglang-1" deleted from default namespace
+concurrency=8 requests=800 max_tokens=128 seconds=30.1
+outcomes={200: 64, 502: 735, 504: 1}
+ok_latency_s p50=0.98 p99=2.14 max=2.14
+
+# Earlier (same evening, no traffic during the failure): after deleting sglang-1 the
+# gateway logged "Worker refresh failed for worker-b: All connection attempts
+# failed" 5 s later and every 5 s after; worker-a unaffected.
+
+## Grafana (plots/grafana-2026-09-29/06-kill-worker-b-under-load.png)
+# Placements per worker: worker-b ~13.5/s (1-minute rate) during the failure,
+# worker-a ~1/s. Engine running on worker-a spikes only after the run.
+
+## Interpretation: fail-fast black hole
+# A dead worker refuses connections within milliseconds, so its gateway queue
+# drains instantly and it looks least loaded; least-loaded placement then sends
+# nearly all traffic to it. The gateway only clears readiness on the next metrics
+# poll (up to 5 s; polling.py sets ready=False on refresh failure). With 8 clients
+# failing in milliseconds, 735 of 800 requests were burnt inside that window and the
+# run ended in 30 s instead of ~100 s. Fix planned: passive health check - on a
+# connection error in dispatch, mark the worker not ready immediately so the next
+# placement avoids it; prepare_worker re-warms it when it returns.
+
+## Grafana engine panels around the kill runs (07-kill-worker-b-kv-ttft-tokens.png)
+# - Generated tokens/s: worker-a reaches ~770 tok/s at the end while it alone
+#   serves 8 concurrent requests (worker-b unready); ~115 tok/s with dispatch cap 2.
+# - TTFT p99 for worker-b jumps to ~5-6 s right after each restart (~22:00, 22:03,
+#   22:05) while p50 stays normal. histogram_quantile over few samples: indicative
+#   only; first_token.py measurements remain the warmup evidence.
+# - KV usage ~0-1 %; prefix cache hit rate ~0.97 while serving.
+
+## Second kill run (started a few minutes after the first)
+[1] 36887
+pod "sglang-1" deleted from default namespace
+concurrency=8 requests=800 max_tokens=128 seconds=113.1
+outcomes={200: 782, 502: 18}
+ok_latency_s p50=0.96 p99=2.02 max=2.05
+# Not a clean replicate: a restarted sglang-1 needs ~1.5 min to become Ready, and
+# this run started within that window, so worker-b was probably still unready when
+# it was killed again. Grafana (08/09-kill-run2-*.png): worker-a took most
+# placements (~8/s vs ~1/s), ran 8 requests (the dispatch cap) and reached
+# ~1,000 generated tok/s on its own - a single-worker throughput figure at 8
+# concurrent requests (vs ~115 tok/s per worker with dispatch cap 2).
+
+## Recovery of worker-b as seen by the gateway (host time = log time + 2 h)
+$ sudo docker compose -p course-assistant logs --since=4m gateway | grep -E "worker-b|30002/health|30002/v1/models|30002/v1/chat|WARNING" | tail -30
+gateway-1  | 2026-09-29 20:05:42,588 WARNING gateway.monitoring.polling Worker refresh failed for worker-b: All connection attempts failed
+... (every 5 s) ...
+gateway-1  | 2026-09-29 20:06:32,604 WARNING gateway.monitoring.polling Worker refresh failed for worker-b: All connection attempts failed
+gateway-1  | 2026-09-29 20:06:38,606 INFO httpx HTTP Request: GET http://host.docker.internal:30002/health "HTTP/1.1 200 OK"
+gateway-1  | 2026-09-29 20:06:38,608 INFO httpx HTTP Request: GET http://host.docker.internal:30002/v1/models "HTTP/1.1 200 OK"
+gateway-1  | 2026-09-29 20:06:40,488 INFO httpx HTTP Request: POST http://host.docker.internal:30002/v1/chat/completions "HTTP/1.1 200 OK"
+gateway-1  | 2026-09-29 20:06:42,317 INFO httpx HTTP Request: POST http://host.docker.internal:30002/v1/chat/completions "HTTP/1.1 200 OK"
+gateway-1  | 2026-09-29 20:06:42,318 INFO httpx HTTP Request: POST http://host.docker.internal:30002/v1/chat/completions "HTTP/1.1 200 OK"
+gateway-1  | 2026-09-29 20:06:42,318 INFO httpx HTTP Request: POST http://host.docker.internal:30002/v1/chat/completions "HTTP/1.1 200 OK"
+gateway-1  | 2026-09-29 20:06:42,318 INFO httpx HTTP Request: POST http://host.docker.internal:30002/v1/chat/completions "HTTP/1.1 200 OK"
+gateway-1  | 2026-09-29 20:06:42,319 INFO httpx HTTP Request: POST http://host.docker.internal:30002/v1/chat/completions "HTTP/1.1 200 OK"
+gateway-1  | 2026-09-29 20:06:42,319 INFO httpx HTTP Request: POST http://host.docker.internal:30002/v1/chat/completions "HTTP/1.1 200 OK"
+gateway-1  | 2026-09-29 20:06:42,320 INFO httpx HTTP Request: POST http://host.docker.internal:30002/v1/chat/completions "HTTP/1.1 200 OK"
+gateway-1  | 2026-09-29 20:06:42,542 INFO httpx HTTP Request: POST http://host.docker.internal:30002/v1/chat/completions "HTTP/1.1 200 OK"
+gateway-1  | 2026-09-29 20:06:43,273 INFO httpx HTTP Request: POST http://host.docker.internal:30002/v1/chat/completions "HTTP/1.1 200 OK"
+... (more, 8 at a time) ...
+
+# Timeline: unready while the pod restarts (refresh failed every 5 s); 20:06:38
+# prepare_worker: /health 200, /v1/models 200; 20:06:40 gateway warmup completion
+# 200 (1.9 s), worker marked ready; 20:06:42 eight user requests at once (the full
+# dispatch cap), then more in batches of 8. The gateway "slams" a returning worker
+# at 100 % within 2 s; least-loaded prefers the empty worker. Combined with the
+# measured cold-replica costs (cold prefix 54-73 ms vs 16 ms, one-time ~100 ms,
+# Grafana TTFT p99 5-6 s after restarts) this argues for a ramp (e.g. cap 1->2->4->8
+# per poll interval while p99 holds). Not implemented.
