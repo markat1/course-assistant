@@ -14,6 +14,9 @@ def check_gpu() -> None:
     print(f"GPU: {device.name}")
     print(f"GPU memory: {device.total_memory / 1024**3:.1f} GiB")
 
+    free, total = torch.cuda.mem_get_info()
+    print(f"Visible memory limit: {total / 1024**3:.1f} GiB")
+
     matrix = torch.ones((32, 32), device="cuda", dtype=torch.bfloat16)
     result = matrix @ matrix
 

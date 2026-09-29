@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: gpu-check
+spec:
+  restartPolicy: Never
+  runtimeClassName: nvidia
+  containers:
+    - name: gpu-check
+      image: docker.io/lmsysorg/sglang:v0.5.20-cu130@sha256:06e4f2ed21afde4ff513cda65070124e727ba23ccaeff7712b8c40e1097d611f
+      imagePullPolicy: IfNotPresent
+      command: ["python3", "/checks/check_gpu_container.py"]
+      resources:
+        requests:
+          cpu: "1"
+          memory: 4Gi
+        limits:
+          cpu: "2"
+          memory: 8Gi
+          nvidia.com/gpu: 1
+          nvidia.com/gpumem: 30000
+      volumeMounts:
+        - name: checks
+          mountPath: /checks
+          readOnly: true
+  volumes:
+    - name: checks
+      configMap:
+        name: gpu-check
