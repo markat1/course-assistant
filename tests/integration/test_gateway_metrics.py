@@ -22,6 +22,7 @@ async def client(monkeypatch):
         SimpleNamespace(
             metrics_max_age_s=10.0, kv_usage_limit=0.9,
             queue_timeout_s=5, capacity_retry_after_s=7, queue_max_size=16,
+            context_length=8192, max_output_tokens=1024,
         ),
         raising=False,
     )

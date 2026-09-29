@@ -22,3 +22,10 @@ PLACE_TOTAL = Counter(
     labelnames=["worker"],
     registry=GATEWAY_REGISTRY
 )
+
+GUARD_REJECTED_TOTAL = Counter(
+    "orch_guard_rejected_total",
+    "Requests rejected by the guard before admission, by reason.",
+    labelnames=["reason"],
+    registry=GATEWAY_REGISTRY
+)

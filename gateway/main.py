@@ -1,13 +1,15 @@
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, HTTPException, Request, Response
 from gateway.lifespan import lifespan
 from gateway.models.chat.chat_request import ChatRequest
 from gateway.policies.admission import admit
 from gateway.policies.routing import select_worker
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from gateway.api.chat import reject_before_dispatch, serve_queued_chat
+from gateway.policies.guard import inspect
 
 from gateway.monitoring.metrics import (
     GATEWAY_REGISTRY,
+    GUARD_REJECTED_TOTAL,
     REQUEST_TOTAL,
     PLACE_TOTAL
 )
@@ -49,6 +51,15 @@ async def chat_completions(chat_request: ChatRequest, request: Request):
     """Validate admission and select a worker for a chat completion"""
     settings = request.app.state.settings
     workers = request.app.state.workers
+
+    guard = inspect(
+        chat_request,
+        context_length=settings.context_length,
+        max_output_tokens=settings.max_output_tokens,
+    )
+    if not guard.ok:
+        GUARD_REJECTED_TOTAL.labels(reason=guard.reason).inc()
+        raise HTTPException(status_code=guard.status, detail=guard.reason)
 
     decision = admit(
         workers.values(),

@@ -1,0 +1,22 @@
+# Client-observed TTFT through the gateway (streaming) - 29 September 2026, ~21:40 UTC
+# Release 59122c9 (streaming commit 76add6f): the gateway relays SSE chunks from the
+# engine while the dispatch slot and in-flight count stay held until the relay ends;
+# a client disconnect closes the engine stream. 255 local tests pass.
+# experiments/stream_ttft.py inside the gateway image: 6 sequential streaming requests
+# to http://gateway:8780/v1 with the shared WARMUP_PREFIX (~1,670 tokens) and a new
+# question each, max_tokens=64. TTFT = time to the first SSE event with non-empty
+# delta.content (role-only events ignored). Both workers warm; placement is random
+# between them.
+
+$ sudo docker compose ... run ... gateway - < experiments/stream_ttft.py
+gateway=http://gateway:8780/v1 model=Qwen/Qwen3-8B runs=6
+run=1 ttft_s=0.035 total_s=0.461
+run=2 ttft_s=0.024 total_s=0.443
+run=3 ttft_s=0.018 total_s=0.445
+run=4 ttft_s=0.019 total_s=0.444
+run=5 ttft_s=0.032 total_s=0.457
+run=6 ttft_s=0.027 total_s=0.453
+
+# TTFT through the serve path: 18-35 ms. Direct to a warm worker (prefill + first
+# token, max_tokens=1): 15-16 ms. The gateway (queue, dispatch, relay) adds roughly
+# 3-19 ms. Decode: 64 tokens in ~0.45 s total, ~140 tok/s per stream.

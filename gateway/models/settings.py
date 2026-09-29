@@ -43,6 +43,8 @@ class Settings(BaseSettings):
         gt=0,
         allow_inf_nan=False
     )
+    context_length: int = Field(default=8192, gt=0)
+    max_output_tokens: int = Field(default=1024, gt=0)
     capacity_retry_after_s: int = Field(default=2, gt=0)
     warmup_prompt: str = Field(
         default=(

@@ -37,6 +37,7 @@ def serving(monkeypatch):
         settings = SimpleNamespace(
             metrics_max_age_s=10, kv_usage_limit=0.9, queue_timeout_s=timeout_s,
             capacity_retry_after_s=7, queue_max_size=1,
+            context_length=8192, max_output_tokens=1024,
         )
         monkeypatch.setattr(app.state, "workers", {worker.id: worker}, raising=False)
         monkeypatch.setattr(app.state, "queues", {worker.id: queue}, raising=False)
@@ -312,3 +313,28 @@ async def test_streaming_request_with_engine_error_returns_the_error_unstreamed(
         assert response.headers["retry-after"] == "3"
         await asyncio.wait_for(service.queue.join(), timeout=1)
         assert service.worker.gateway_in_flight == 0
+
+
+@pytest.mark.asyncio
+async def test_guard_rejects_before_admission_without_reaching_the_engine(serving):
+    requests = []
+
+    def engine(request):
+        requests.append(request)
+        return httpx.Response(200, json={"choices": []})
+
+    async with serving(engine) as service:
+        before = await service.client.get("/metrics")
+        response = await service.client.post(CHAT_URL, json={**PAYLOAD, "max_tokens": 4096})
+        after = await service.client.get("/metrics")
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "bad_max_tokens"}
+    assert requests == []
+    assert 'orch_guard_rejected_total{reason="bad_max_tokens"} 1.0' in after.text
+    assert 'orch_guard_rejected_total{reason="bad_max_tokens"}' not in before.text
+    assert shed_lines(after.text) == shed_lines(before.text)
+
+
+def shed_lines(metrics_text: str) -> list[str]:
+    return [line for line in metrics_text.splitlines() if line.startswith("orch_shed_total{")]
