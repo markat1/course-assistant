@@ -1,0 +1,68 @@
+{
+  "uid": "course-assistant-engine",
+  "title": "Course Assistant Engine and Queues",
+  "schemaVersion": 39,
+  "version": 1,
+  "tags": ["course-assistant", "sglang"],
+  "timezone": "browser",
+  "refresh": "5s",
+  "time": {"from": "now-15m", "to": "now"},
+  "panels": [
+    {
+      "id": 1, "type": "timeseries", "title": "Gateway sheds by reason (per second)",
+      "gridPos": {"x": 0, "y": 0, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sum by (reason, code) (rate(orch_shed_total[1m]))", "legendFormat": "{{reason}} ({{code}})"}]
+    },
+    {
+      "id": 2, "type": "timeseries", "title": "Gateway placements per worker (per second)",
+      "gridPos": {"x": 12, "y": 0, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sum by (worker) (rate(orch_place_total[1m]))", "legendFormat": "{{worker}}"}]
+    },
+    {
+      "id": 3, "type": "timeseries", "title": "Engine running requests per worker",
+      "gridPos": {"x": 0, "y": 8, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sglang:num_running_reqs", "legendFormat": "{{worker}}"}]
+    },
+    {
+      "id": 4, "type": "timeseries", "title": "Engine queued requests per worker",
+      "gridPos": {"x": 12, "y": 8, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sglang:num_queue_reqs", "legendFormat": "{{worker}}"}]
+    },
+    {
+      "id": 5, "type": "timeseries", "title": "KV cache usage per worker",
+      "gridPos": {"x": 0, "y": 16, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}, "overrides": []},
+      "targets": [{"refId": "A", "expr": "sglang:full_token_usage", "legendFormat": "{{worker}}"}]
+    },
+    {
+      "id": 6, "type": "timeseries", "title": "Time to first token p50 / p99 per worker",
+      "gridPos": {"x": 12, "y": 16, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+      "targets": [
+        {"refId": "A", "expr": "histogram_quantile(0.5, sum by (le, worker) (rate(sglang:time_to_first_token_seconds_bucket[1m])))", "legendFormat": "p50 {{worker}}"},
+        {"refId": "B", "expr": "histogram_quantile(0.99, sum by (le, worker) (rate(sglang:time_to_first_token_seconds_bucket[1m])))", "legendFormat": "p99 {{worker}}"}
+      ]
+    },
+    {
+      "id": 7, "type": "timeseries", "title": "Generated tokens per second per worker",
+      "gridPos": {"x": 0, "y": 24, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sum by (worker) (rate(sglang:generation_tokens_total[1m]))", "legendFormat": "{{worker}}"}]
+    },
+    {
+      "id": 8, "type": "timeseries", "title": "Prefix cache hit rate and retracted (preempted) requests",
+      "gridPos": {"x": 12, "y": 24, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"refId": "A", "expr": "sglang:cache_hit_rate", "legendFormat": "hit rate {{worker}}"},
+        {"refId": "B", "expr": "sglang:num_retracted_reqs", "legendFormat": "retracted {{worker}}"}
+      ]
+    }
+  ]
+}
