@@ -1,0 +1,25 @@
+# Application streaming to Open WebUI - 30 September 2026 (night)
+# Release cc96212 ("Stream the Tutor's answer from the app to Open WebUI"); 283 local
+# tests pass. App uses the Agents SDK streamed runner and forwards only text deltas
+# (tool calls and handoffs stay internal); the first delta is awaited before the
+# StreamingResponse starts so gateway errors (e.g. 503 + Retry-After) remain HTTP
+# errors. compose.ui.yaml: stream_response true.
+
+$ ls -t ~/course-assistant/releases | head -2
+cc96212834e0c89b8e0564920f237ce98303fb9a
+2e66a26ee6eb9db16e485ac5ca4cae51368ae1be
+$ sudo docker ps --format "{{.Names}}  {{.Status}}" | grep -E "app|open-webui"
+course-assistant-open-webui-1  Up About a minute (healthy)
+course-assistant-app-1  Up About a minute
+$ curl -N -s -m 60 localhost:8781/v1/chat/completions ... '{"model":"course-assistant","messages":[{"role":"user","content":"How does KV cache size limit concurrent requests?"}],"stream":true}' | head -5
+data: {"id": "chatcmpl-dabc50c61528441eaddc7287ef9eea84", "object": "chat.completion.chunk", "created": 1790720753, "model": "course-assistant", "choices": [{"index": 0, "delta": {"role": "assistant", "content": "The"}, "finish_reason": null}]}
+
+data: {"id": "chatcmpl-dabc50c61528441eaddc7287ef9eea84", "object": "chat.completion.chunk", "created": 1790720753, "model": "course-assistant", "choices": [{"index": 0, "delta": {"content": " KV"}, "finish_reason": null}]}
+
+data: {"id": "chatcmpl-dabc50c61528441eaddc7287ef9eea84", "object": "chat.completion.chunk", "created": 1790720753, "model": "course-assistant", "choices": [{"index": 0, "delta": {"content": " cache"}, "finish_reason": null}]}
+
+# Open WebUI (browser, model course-assistant): the Tutor's answer streams into the
+# chat after the user enabled "Stream Chat Response" - Open WebUI had kept the
+# earlier per-user "off" setting, which overrides DEFAULT_INTERFACE_SETTINGS.
+# Before the first word appears, Router -> handoff -> Tutor -> lookup_course run
+# without text output.
