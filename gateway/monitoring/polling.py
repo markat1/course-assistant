@@ -8,6 +8,7 @@ from gateway.models.workers.worker_state import WorkerState
 from gateway.models.settings import Settings
 from gateway.monitoring.readiness import prepare_worker
 from gateway.monitoring.warmup_request import build_warmup_requests
+from gateway.execution.hops import forget_worker
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,7 @@ async def monitor_worker(
             await refresh_worker(client, worker, settings)
         except (httpx.HTTPError, TimeoutError, ValueError) as exc:
             worker.ready = False
+            forget_worker(worker.id)
             logger.warning(
                 "Worker refresh failed for %s: %s",
                 worker.id,

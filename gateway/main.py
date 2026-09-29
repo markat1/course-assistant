@@ -6,6 +6,7 @@ from gateway.policies.routing import select_worker
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from gateway.api.chat import reject_before_dispatch, serve_queued_chat
 from gateway.policies.guard import inspect
+from gateway.execution.hops import record_placement
 
 from gateway.monitoring.metrics import (
     GATEWAY_REGISTRY,
@@ -89,6 +90,7 @@ async def chat_completions(chat_request: ChatRequest, request: Request):
         )
 
     PLACE_TOTAL.labels(worker=worker.id).inc()
+    record_placement(chat_request, worker.id)
 
     return await serve_queued_chat(
         chat_request,

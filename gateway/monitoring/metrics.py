@@ -36,3 +36,16 @@ OVERFLOW_TOTAL = Counter(
     labelnames=["decision", "code"],
     registry=GATEWAY_REGISTRY
 )
+
+HOP_TOTAL = Counter(
+    "orch_hop_total",
+    "Placements of a known prefix on a different worker; KV is recomputed, not copied.",
+    labelnames=["src", "dst", "backend"],
+    registry=GATEWAY_REGISTRY
+)
+
+HOP_TOKENS_TOTAL = Counter(
+    "orch_hop_tokens_total",
+    "Estimated prefix tokens recomputed because of hops.",
+    registry=GATEWAY_REGISTRY
+)

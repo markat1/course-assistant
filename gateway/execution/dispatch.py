@@ -8,6 +8,7 @@ from gateway.execution.forwarding import forward_chat
 from gateway.models.queued_request import QueuedRequest
 from gateway.models.workers.worker_state import WorkerState
 from gateway.execution.errors import DispatchError
+from gateway.execution.hops import forget_worker
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,7 @@ async def dispatch_one(
         await forward_until_done(client, worker, pending)
     except httpx.ConnectError as exc:
         worker.ready = False
+        forget_worker(worker.id)
         logger.warning(
             "Connection to worker %s failed; marked not ready",
             worker.id,
