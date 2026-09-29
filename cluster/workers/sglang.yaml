@@ -1,0 +1,83 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: sglang
+spec:
+  clusterIP: None
+  selector:
+    app: sglang
+  ports:
+    - name: http
+      port: 8000
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: sglang
+spec:
+  serviceName: sglang
+  replicas: 2
+  selector:
+    matchLabels:
+      app: sglang
+  template:
+    metadata:
+      labels:
+        app: sglang
+    spec:
+      runtimeClassName: nvidia
+      containers:
+        - name: sglang
+          image: docker.io/lmsysorg/sglang:v0.5.20-cu130@sha256:06e4f2ed21afde4ff513cda65070124e727ba23ccaeff7712b8c40e1097d611f
+          imagePullPolicy: IfNotPresent
+          command: ["python3", "-m", "sglang.launch_server"]
+          args:
+            - --model-path=Qwen/Qwen3-8B
+            - --revision=b968826d9c46dd6066d109eabc6255188de91218
+            - --host=0.0.0.0
+            - --port=8000
+            - --tp-size=1
+            - --dtype=bfloat16
+            - --context-length=8192
+            - --mem-fraction-static=0.85
+            - --max-running-requests=8
+            - --chunked-prefill-size=2048
+            - --tool-call-parser=qwen25
+            - '--default-chat-template-kwargs={"enable_thinking":false}'
+            - --enable-metrics
+          ports:
+            - name: http
+              containerPort: 8000
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            failureThreshold: 90
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: "4"
+              memory: 32Gi
+            limits:
+              memory: 48Gi
+              nvidia.com/gpu: 1
+              nvidia.com/gpumem: 38000
+          volumeMounts:
+            - name: huggingface-cache
+              mountPath: /root/.cache/huggingface
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        - name: huggingface-cache
+          hostPath:
+            path: /var/lib/course-assistant/huggingface
+            type: DirectoryOrCreate
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 8Gi
