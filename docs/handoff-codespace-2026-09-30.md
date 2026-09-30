@@ -36,9 +36,9 @@ local Claude Code session history was not available there, so this file and
 
 ## Next (no GPU needed)
 
-In progress: `orch_replica_queue_depth{worker}` / `orch_replica_in_flight{worker}`
-gauges and `orch_hop_evictions_total{cause}` (tests written:
-`tests/integration/test_queue_depth_metrics.py`, `tests/unit/test_hop_ledger.py`,
-`tests/unit/test_hops.py`). Then: `prefix_then_load` + per-prefix worker set,
-ramp for a returning worker, four Prometheus alert rules, notebook skeleton.
+Done: `orch_replica_queue_depth{worker}`, `orch_replica_in_flight{worker}` (set on
+each `/metrics` scrape) and `orch_hop_evictions_total{cause=capacity|worker_lost}`.
+Done: `prefix_then_load` placement (`GATEWAY_PREFIX_LOAD_SLACK`, default 4) and
+a hop ledger that keeps the set of workers per prefix.
+Then: ramp for a returning worker, four Prometheus alert rules, notebook skeleton.
 On the next GPU session, re-run the labelled Locust mix (tenant sheds, p99 spread).

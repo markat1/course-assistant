@@ -7,11 +7,13 @@ from gateway.policies.routing import select_worker
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from gateway.api.chat import reject_before_dispatch, serve_queued_chat
 from gateway.policies.guard import estimate_prompt_tokens, inspect
-from gateway.execution.hops import record_placement
+from gateway.execution.hops import prefix_holders, record_placement
 
 from gateway.monitoring.metrics import (
     GATEWAY_REGISTRY,
     GUARD_REJECTED_TOTAL,
+    IN_FLIGHT,
+    QUEUE_DEPTH,
     REQUEST_TOTAL,
     PLACE_TOTAL
 )
@@ -31,8 +33,13 @@ async def count_chat_requests(request: Request, call_next):
     return await call_next(request)
 
 @app.get("/metrics", include_in_schema=False)
-async def metrics() -> Response:
+async def metrics(request: Request) -> Response:
     """Expose gateway metrics in Prometheus format."""
+
+    for worker in getattr(request.app.state, "workers", {}).values():
+        QUEUE_DEPTH.labels(worker=worker.id).set(worker.gateway_queue_depth)
+        IN_FLIGHT.labels(worker=worker.id).set(worker.gateway_in_flight)
+
     return Response(
         content=generate_latest(GATEWAY_REGISTRY),
         headers={"Content-type": CONTENT_TYPE_LATEST}
@@ -100,6 +107,8 @@ async def chat_completions(chat_request: ChatRequest, request: Request):
         decision.workers,
         max_metrics_age_s=settings.metrics_max_age_s,
         queue_max_size=settings.queue_max_size,
+        holders=prefix_holders(chat_request),
+        prefix_load_slack=settings.prefix_load_slack,
     )
 
     if worker is None:

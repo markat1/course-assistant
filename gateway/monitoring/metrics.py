@@ -1,4 +1,5 @@
 from prometheus_client import CollectorRegistry, Counter
+from prometheus_client import CollectorRegistry, Counter, Gauge
 
 GATEWAY_REGISTRY = CollectorRegistry()
 
@@ -47,5 +48,26 @@ HOP_TOTAL = Counter(
 HOP_TOKENS_TOTAL = Counter(
     "orch_hop_tokens_total",
     "Estimated prefix tokens recomputed because of hops.",
+    registry=GATEWAY_REGISTRY
+)
+
+QUEUE_DEPTH = Gauge(
+    "orch_replica_queue_depth",
+    "Requests waiting in the gateway queue of each worker.",
+    labelnames=["worker"],
+    registry=GATEWAY_REGISTRY,
+)
+
+IN_FLIGHT = Gauge(
+    "orch_replica_in_flight",
+    "Requests the gateway has dispatched to each worker and not finished.",
+    labelnames=["worker"],
+    registry=GATEWAY_REGISTRY
+)
+
+HOP_EVICTIONS_TOTAL = Counter(
+    "orch_hop_evictions_total",
+    "Prefixes the hop ledge forgot: capacity (ledger full) or worker_lost (cache gone)",
+    labelnames=["cause"],
     registry=GATEWAY_REGISTRY
 )

@@ -2,7 +2,7 @@ import hashlib
 import logging
 
 from gateway.models.chat.chat_request import ChatRequest
-from gateway.monitoring.metrics import HOP_TOKENS_TOTAL, HOP_TOTAL
+from gateway.monitoring.metrics import HOP_EVICTIONS_TOTAL, HOP_TOKENS_TOTAL, HOP_TOTAL
 from gateway.policies.guard import CHARS_PER_TOKEN
 from gateway.policies.hop_ledger import Hop, HopLedger
 
@@ -22,7 +22,9 @@ def prefix_key(payload: ChatRequest) -> tuple[str, int]:
 def record_placement(payload: ChatRequest, worker_id: str) -> Hop | None:
     """Record where a prefix was placed and count a hop when it moved worker."""
     prefix, tokens = prefix_key(payload)
+    evicted_before = HOP_LEDGER.evictions
     hop = HOP_LEDGER.record(prefix, worker_id, tokens=tokens)
+    HOP_EVICTIONS_TOTAL.labels(cause="capacity").inc(HOP_LEDGER.evictions - evicted_before)
     if hop is not None:
         HOP_TOTAL.labels(src=hop.src, dst=hop.dst, backend=hop.backend).inc()
         HOP_TOKENS_TOTAL.inc(hop.tokens)
@@ -32,4 +34,10 @@ def record_placement(payload: ChatRequest, worker_id: str) -> Hop | None:
 
 def forget_worker(worker_id: str) -> None:
     """A worker lost its cache (restart or failure); forget its prefixes."""
-    HOP_LEDGER.forget_worker(worker_id)
+    lost = HOP_LEDGER.forget_worker(worker_id)
+    HOP_EVICTIONS_TOTAL.labels(cause="worker_lost").inc(lost)
+
+def prefix_holders(payload: ChatRequest) -> set[str]:
+    """Workers whose cache already holds this requests's shared prefix."""
+    prefix, _ = prefix_key(payload)
+    return HOP_LEDGER.holders(prefix)

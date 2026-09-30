@@ -12,24 +12,46 @@ class Hop:
 
 
 class HopLedger:
-    """Remember where each shared prefix was last placed; nothing is copied between workers."""
+    """Remember which workers hold each shared prefix; nothing is copied between workers."""
 
     def __init__(self, max_prefixes: int = 1024) -> None:
-        self._owners: OrderedDict[str, str] = OrderedDict()
+        self._holders: OrderedDict[str, list[str]] = OrderedDict()
         self._max_prefixes = max_prefixes
+        self.evictions = 0
 
     def record(self, prefix: str, dst: str, *, tokens: int) -> Hop | None:
-        src = self._owners.pop(prefix, None)
-        self._owners[prefix] = dst
-        if len(self._owners) > self._max_prefixes:
-            self._owners.popitem(last=False)
-        if src is None or src == dst:
+        holders = self._holders.pop(prefix, [])
+        self._holders[prefix] = holders
+        
+        if len(self._holders) > self._max_prefixes:
+            self._holders.popitem(last=False)
+            self.evictions += 1
+        
+        if not holders:
+            holders.append(dst)
             return None
+
+        if dst in holders:
+            holders.remove(dst)
+            holders.append(dst)
+            return None
+        
+        src = holders[-1]
+        holders.append(dst)
         return Hop(src=src, dst=dst, prefix=prefix, tokens=tokens)
+    
+    def holders(self, prefix: str) -> set[str]:
+        return set(self._holders.get(prefix,()))
 
     def forget_worker(self, worker_id: str) -> int:
-        """Drop prefixes of a worker whoe cache is gone, so they cannot become ghosts"""
-        lost = [prefix for prefix, owner in self._owners.items() if owner == worker_id]
-        for prefix in lost:
-            del self._owners[prefix]
-        return len(lost)
+        """Drop a worker whose cache is gone from every prefix, so it cannot become a ghost."""
+        lost = 0
+        for prefix in list(self._holders):
+            holders = self._holders[prefix]
+            if worker_id in holders:
+                holders.remove(worker_id)
+                lost += 1
+                if not holders:
+                    del self._holders[prefix]
+        return lost
+   
