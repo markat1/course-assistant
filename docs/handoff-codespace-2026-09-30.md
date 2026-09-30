@@ -43,5 +43,8 @@ a hop ledger that keeps the set of workers per prefix.
 Done: ramp for a returning worker (limit 1 → 2 → 4 → 8 per poll, halves when the engine queues).
 Done: four alert rules (`monitoring/alerts.yaml`, promtool tests in
 `monitoring/tests/alerts_test.yaml`) and three new Grafana panels in `engine.json`.
-Then: notebook skeleton.
+Done: Part 5 notebook `notebook/part5_queue.ipynb` (run with
+`uv run --group notebook jupyter lab` and `PROM_URL`; smoke-tested against a fake
+Prometheus in the Codespace, not yet against the GPU).
+Then: GPU session plan.
 On the next GPU session, re-run the labelled Locust mix (tenant sheds, p99 spread).

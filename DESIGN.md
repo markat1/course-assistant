@@ -233,7 +233,12 @@ admit -> place -> gateway queue (per worker, FIFO, 16) -> dispatch (8 per worker
 | Client gone? | Streaming: a client disconnect closes the gateway→engine stream, SGLang aborts the request and frees its KV. The shared prefix stays in the radix cache as evictable cache. Queue: `forward_until_done` cancels the upstream task when the request's result is already done (e.g. expired). **GAP**: prove the abort on the GPU (engine running count drops). |
 | Worker returns: slam or ramp? | Ramp. Before, it slammed: 8 requests within 2 s of warmup (`metrics/kill-worker-under-load-2026-09-29.txt`, recovery timeline). Now a worker that becomes ready starts at `ramp_limit = 1` (`gateway/monitoring/polling.py:refresh_worker`); each metrics poll (5 s) doubles it up to the dispatch cap (1 → 2 → 4 → 8 in 15 s) while the engine queue is empty, and halves it when `sglang:num_queue_reqs > 0` (`gateway/policies/ramp.py`). The engine queue is our proxy for "p99 holds": once SGLang makes requests wait, TTFT is rising. Routing adds `dispatch_max − ramp_limit` to the worker's load (`gateway/policies/routing.py:gateway_load`), so a returning worker gets traffic only when the warm one is busier. It is a soft cap: if the warm worker is full, the ramping one still serves rather than shedding. Tests: `tests/unit/test_ramp.py`, `tests/integration/test_worker_ramp.py`, `tests/integration/test_prefix_placement.py`. **GAP**: repeat the kill-worker run on the GPU. |
 
-**GAP: notebook** (`notebook/`) that answers these from a live Prometheus scrape.
+**Notebook:** `notebook/part5_queue.ipynb` answers these from a live Prometheus
+scrape (queue table per worker, queue depth by pod, door sheds vs engine
+retractions, radix cache vs KV usage, hops and sheds, ramp after a kill) and
+saves its plots to `plots/`. Query helpers: `experiments/prometheus_snapshot.py`
+(tested in `tests/unit/test_prometheus_snapshot.py`). **GAP**: run it with
+outputs during the GPU session.
 
 ## Part 6. Hop and warmup
 
@@ -331,7 +336,7 @@ Can be done without a GPU (code and tests), then proven on the GPU:
 6. ~~Four alerts~~ and Grafana panels for queue depth, hops/evictions and overflow: done (`monitoring/alerts.yaml`, `engine.json`).
 7. **Name the overflow model** (e.g. the same Qwen3-8B on a hosted provider, so
    the tool parser and prompts behave identically; interactive only, 503/529 only).
-8. **Notebook** (`notebook/`) for Part 5 from a live Prometheus scrape.
+8. ~~Notebook~~: written (`notebook/part5_queue.ipynb`); run it with outputs on the GPU.
 9. GPU cost/availability reasoning in Part 2.
 
 Needs the GPU: live evidence for items 1–5 (tenant sheds on `revision-batch`,
