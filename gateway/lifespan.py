@@ -11,6 +11,7 @@ from gateway.models.workers.worker_state import WorkerState
 from gateway.execution.lifecycle import manage_worker_tasks
 from gateway.models.queued_request import QueuedRequest
 from gateway.monitoring.logging_config import configure_logging
+from gateway.policies.tenant_window import TenantWindow
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
@@ -22,6 +23,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.settings = settings
     app.state.workers = workers
     app.state.queues = queues
+    app.state.tenant_window = create_tenant_window(settings)
 
     configure_logging(settings.log_level)
 
@@ -55,3 +57,10 @@ def create_queues(
         worker_id: asyncio.Queue[QueuedRequest](maxsize=max_size)
         for worker_id in workers
     }
+
+def create_tenant_window(settings: Settings) -> TenantWindow:
+    """Create the per-tenant token budget."""
+    return TenantWindow(
+        max_tokens=settings.tenant_max_tokens,
+        window_s=settings.tenant_window_s
+    )

@@ -61,3 +61,5 @@ class Settings(BaseSettings):
         gt=0,
         allow_inf_nan=False,
     )
+    tenant_max_tokens: int = Field(default=200_000, gt=0)
+    tenant_window_s: float = Field(default=60.0, gt=0, allow_inf_nan=False)

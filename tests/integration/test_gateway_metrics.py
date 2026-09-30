@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 
 from gateway.main import app
 from gateway.models.workers.worker_state import WorkerState
+from gateway.policies.tenant_window import TenantWindow
 
 
 @pytest_asyncio.fixture
@@ -29,6 +30,10 @@ async def client(monkeypatch):
     monkeypatch.setattr(
         app.state, "queues", {name: asyncio.Queue() for name in ("worker-a", "worker-b")},
         raising=False,
+    )
+
+    monkeypatch.setattr(
+        app.state, "tenant_window", TenantWindow(max_tokens=10**9, window_s=60.0), raising=False,
     )
 
     # Isolate counter behavior here; test_chat_api covers real queue/dispatch execution.

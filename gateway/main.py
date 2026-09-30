@@ -5,7 +5,7 @@ from gateway.policies.admission import admit
 from gateway.policies.routing import select_worker
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from gateway.api.chat import reject_before_dispatch, serve_queued_chat
-from gateway.policies.guard import inspect
+from gateway.policies.guard import estimate_prompt_tokens, inspect
 from gateway.execution.hops import record_placement
 
 from gateway.monitoring.metrics import (
@@ -61,6 +61,19 @@ async def chat_completions(chat_request: ChatRequest, request: Request):
     if not guard.ok:
         GUARD_REJECTED_TOTAL.labels(reason=guard.reason).inc()
         raise HTTPException(status_code=guard.status, detail=guard.reason)
+
+    tenant = request.headers.get("x-tenant", "default")
+    tokens = estimate_prompt_tokens(chat_request) + (
+        chat_request.max_tokens or settings.max_output_tokens
+    )
+
+    tenant_decision = request.app.state.tenant_window.admit(tenant, tokens)
+    if not tenant_decision.ok:
+        reject_before_dispatch(
+            tenant_decision.reason,
+            tenant_decision.status,
+            retry_after_s=tenant_decision.retry_after_s,
+        )
 
     decision = admit(
         workers.values(),

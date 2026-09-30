@@ -14,6 +14,7 @@ from gateway.execution.queueing import enqueue_request
 from gateway.main import app
 from gateway.models.chat.chat_request import ChatRequest
 from gateway.models.workers.worker_state import WorkerState
+from gateway.policies.tenant_window import TenantWindow
 
 
 PAYLOAD = {
@@ -42,6 +43,9 @@ def serving(monkeypatch):
         monkeypatch.setattr(app.state, "workers", {worker.id: worker}, raising=False)
         monkeypatch.setattr(app.state, "queues", {worker.id: queue}, raising=False)
         monkeypatch.setattr(app.state, "settings", settings, raising=False)
+        monkeypatch.setattr(
+            app.state, "tenant_window", TenantWindow(max_tokens=10**9, window_s=60.0), raising=False,
+        )
         async with (
             httpx.AsyncClient(transport=httpx.MockTransport(handler)) as upstream,
             httpx.AsyncClient(
