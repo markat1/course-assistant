@@ -402,6 +402,31 @@ Saved run: window 22:30-00:00 on 30 Sep (`WINDOW_MIN=90`), covering the kill tes
   a prefix from its radix cache without telling us, so a counted non-hop can
   in rare cases be a recompute.
 
+**Why recompute and not Mooncake: what a KV transfer would save on this mix.**
+Estimated from our own measurements; no Mooncake was run.
+
+1. A hop costs the cold prefill once: 54-73 ms cold vs 15-17 ms warm, so ~40-55 ms extra
+   (`metrics/warmup-first-token-2026-09-29.txt`).
+2. Hops are rare: 2 in a 3-minute labelled run of ~680 requests, 0 in the rehearsal
+   run (`metrics/locust-labelled-a100-2026-09-30.txt`). Upper bound of the saving:
+   2 x ~55 ms ≈ 0.1 s per 3 minutes.
+3. Moving the KV is not free: the hop record's prefix (922 tokens x 144 KiB) is
+   ≈ 136 MB, the full app prefix (~1,670 tokens) ≈ 246 MB.
+
+| Path | Bandwidth (assumed) | 246 MB takes | vs recompute (~40-55 ms) |
+|---|---|---|---|
+| TCP 10 Gbit/s (no RDMA on one Lambda host) | ~1.25 GB/s | ~200 ms | slower |
+| Host RAM (both workers on one machine) | ~10+ GB/s | ~25 ms | slightly faster |
+| RDMA 200 Gbit/s | ~25 GB/s | ~10 ms | faster |
+
+Break-even: prefill ran ~1,670 tokens in ~45 ms ≈ 37,000 tokens/s, so a transfer must
+deliver 147 KB x 37,000/s ≈ 5.5 GB/s to beat recompute. On this mix Mooncake would
+save at most ~0.1 s per 3 minutes, and over TCP it would be slower than recomputing.
+It pays off for long prefixes (prefill grows faster than linearly with length) or
+with RDMA. The bandwidths are assumptions, not measurements. A switch
+(`GATEWAY_HOP_BACKEND=recompute|mooncake`, default recompute, refused unless the
+workers really use a Mooncake store) is planned but not implemented.
+
 **Is it actually warm?** A replica is not ready when the weights are loaded.
 The gateway's `prepare_worker` (`gateway/monitoring/readiness.py`) checks
 health and the model, then sends **5 warmup requests on the shared application prefix**,
