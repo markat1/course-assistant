@@ -9,6 +9,58 @@ A100-SXM4-80GB (no H100 was free), with the same two 38,000 MiB HAMi slices and
 engine flags. Behavioural results (sheds, priority, hops, ramp, abort, alerts)
 are valid on both; **latencies are only compared within the same GPU**.
 
+## What we ship
+
+Diagrams: `docs/shipping-pipeline.excalidraw` (the brief's pipeline next to ours),
+`docs/architecture.excalidraw` (the whole cluster).
+
+**The brief's pipeline, mapped to `gateway/main.py:chat_completions`:**
+
+| Brief | Ours | Code |
+|---|---|---|
+| user / agent / retriever | every agent step, headers `X-Tenant`, `X-Request-Class` | `app/llm.py`, `app/lifespan.py:25` |
+| guardrails (never reaches a GPU) | `inspect()` -> 400, before anything else | `main.py:64`, `policies/guard.py` |
+| overflow gate (stay or leave, after the local result) | on every refusal and every non-200 engine answer | `api/chat.py:42` `record_overflow_decision`, `policies/overflow.py` |
+| should we accept it? (admit) | tenant window (429), then `admit()` (503) | `main.py:84-103` |
+| which worker? (place) | `select_worker`, `prefix_then_load` | `main.py:106`, `policies/routing.py` |
+| your queue (same pod: no hop; two ids: hop) | `record_placement` records a hop when the prefix moves worker; then the worker's priority queue | `main.py:123`, `execution/hops.py`, `execution/queueing.py` |
+| engine (prefill, decode, KV, waiting/running/preempt) | SGLang, unchanged, configured by flags | `cluster/workers/sglang.yaml` |
+| 429 / 500 / slice_oom stay; 503 / 529 may leave | `LEAVE_STATUSES = {503, 529}`, counted in `orch_overflow_total{decision,code}` | `policies/overflow.py` |
+
+The brief draws the overflow gate right after guardrails, but it decides on the
+**local result**, which exists only after admit, the queue or the engine has
+answered. Ours therefore runs where each result appears: in `reject_before_dispatch`
+and after the engine's answer (`api/chat.py:104`). Part 7 of the brief also puts it last.
+Evidence: 76 x 429 and 73 x 504 counted `stay`, 2 x 503 `leave_disabled`
+(`metrics/locust-labelled-a100-2026-09-30.txt`). Two limits: `slice_oom` has no
+separate code (an SGLang OOM returns 500 and stays), and upstream 502/504 (worker
+dead, upstream timeout) are not counted by the gate.
+
+**The four resources:**
+
+| Resource | What controls it | Scarce? (measured) |
+|---|---|---|
+| Decode slots | `--max-running-requests=8` per worker; gateway dispatch cap 8 | **Yes, binds first**: engines ran exactly 8, the rest waited in our queue (Part 1) |
+| KV blocks | 115,299 tokens per worker; admission stops at 90 % | No: peak 8.8 %, 0 retractions |
+| Hop bandwidth | backend `recompute`: no bytes move | Paid as prefill time instead (cold prefix 54-73 ms vs warm 15-17 ms), so `prefix_then_load` keeps hops low: 2 in a 3-minute mix |
+| Warmup time | 5 warmup requests on the shared prefix before ready, then a ramp | Yes, on restart: first request 54-73 ms without warmup, 22-23 ms with it |
+
+**The six decisions we own:**
+
+| Decision | Where |
+|---|---|
+| guard | `gateway/policies/guard.py` |
+| admit | `gateway/policies/tenant_window.py`, `gateway/policies/admission.py` |
+| place | `gateway/policies/routing.py:select_worker` |
+| queue (hop) | `gateway/execution/queueing.py`, `gateway/execution/hops.py` |
+| declare warm | `gateway/monitoring/readiness.py:prepare_worker` |
+| stay vs leave | `gateway/policies/overflow.py`, `gateway/api/chat.py` |
+
+**Not the scheduler.** FCFS, chunked prefill, batching and preemption stay inside
+SGLang. We only set engine arguments (`--max-running-requests=8`,
+`--chunked-prefill-size=2048`, `--context-length=8192`), which the brief allows.
+The gateway decides what enters and where; SGLang decides what runs in which batch.
+
 ## Part 0. The application
 
 **Track B, tool-using agent, with retrieval as its tool.** Students ask
