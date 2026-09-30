@@ -37,7 +37,7 @@ async def client(monkeypatch):
     )
 
     # Isolate counter behavior here; test_chat_api covers real queue/dispatch execution.
-    async def completed_chat(payload, worker, queue, *, timeout_s, capacity_retry_after_s):
+    async def completed_chat(payload, worker, queue, *, timeout_s, capacity_retry_after_s, **options):
         return JSONResponse({"worker": worker.id})
 
     monkeypatch.setattr("gateway.main.serve_queued_chat", completed_chat)

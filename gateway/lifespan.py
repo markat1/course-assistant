@@ -54,7 +54,7 @@ def create_queues(
 ) -> dict[str, asyncio.Queue[QueuedRequest]]:
     """Create one bounded request queue per worker."""
     return {
-        worker_id: asyncio.Queue[QueuedRequest](maxsize=max_size)
+        worker_id: asyncio.PriorityQueue[QueuedRequest](maxsize=max_size)
         for worker_id in workers
     }
 

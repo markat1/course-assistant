@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from gateway.lifespan import lifespan
 from gateway.models.chat.chat_request import ChatRequest
 from gateway.policies.admission import admit
+from gateway.policies.priority import request_priority
 from gateway.policies.routing import select_worker
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from gateway.api.chat import reject_before_dispatch, serve_queued_chat
@@ -62,7 +63,13 @@ async def chat_completions(chat_request: ChatRequest, request: Request):
         GUARD_REJECTED_TOTAL.labels(reason=guard.reason).inc()
         raise HTTPException(status_code=guard.status, detail=guard.reason)
 
-    tenant = request.headers.get("x-tenant", "default")
+    try:
+        priority= request_priority(request.headers.get("x-request-class", "interactive"))
+    except ValueError:
+        GUARD_REJECTED_TOTAL.labels(reason="bad_request_class").inc()
+        raise HTTPException(status_code=400, detail="bad_request_class")
+
+    tenant = request.headers.get("x-tenant","default")
     tokens = estimate_prompt_tokens(chat_request) + (
         chat_request.max_tokens or settings.max_output_tokens
     )
@@ -111,4 +118,5 @@ async def chat_completions(chat_request: ChatRequest, request: Request):
         request.app.state.queues[worker.id],
         timeout_s=settings.queue_timeout_s,
         capacity_retry_after_s=settings.capacity_retry_after_s,
+        priority=priority,
     )

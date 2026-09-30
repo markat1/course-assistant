@@ -67,6 +67,7 @@ async def serve_queued_chat(
         *,
         timeout_s: float,
         capacity_retry_after_s: int,
+        priority: int = 0
 ) -> Response:
     """Enqueue a selected request and translate its outcome to HTTP."""
     try:
@@ -74,7 +75,8 @@ async def serve_queued_chat(
             queue,
             worker,
             payload,
-            timeout_s=timeout_s
+            timeout_s=timeout_s,
+            priority=priority
         )
 
         upstream = await wait_for_response(pending)

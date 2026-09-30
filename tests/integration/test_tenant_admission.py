@@ -37,7 +37,7 @@ async def gateway(monkeypatch):
     """Gateway with one ready worker and a 1,000-token tenant budget per 60 s."""
     served = []
 
-    async def completed_chat(payload, worker, queue, *, timeout_s, capacity_retry_after_s):
+    async def completed_chat(payload, worker, queue, *, timeout_s, capacity_retry_after_s, **options):
         served.append(payload)
         return JSONResponse({"worker": worker.id})
 

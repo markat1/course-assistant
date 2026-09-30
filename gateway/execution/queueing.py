@@ -10,12 +10,14 @@ def enqueue_request(
         worker: WorkerState,
         payload: ChatRequest,
         *,
-        timeout_s: float) -> QueuedRequest:
+        timeout_s: float,
+        priority: int = 0) -> QueuedRequest:
     """Enqueue immediately or raise QueueFull when capacity is exhausted"""
     pending = QueuedRequest(
         payload=payload,
         result=asyncio.get_running_loop().create_future(),
         expires_at=monotonic() + timeout_s,
+        priority=priority
     )
 
     queue.put_nowait(pending)
