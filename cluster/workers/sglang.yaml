@@ -39,8 +39,8 @@ spec:
             - --tp-size=1
             - --dtype=bfloat16
             - --context-length=8192
-            # H100 80GB: --mem-fraction-static=0.85
-            - --mem-fraction-static=0.93  # A100 40GB
+            - --mem-fraction-static=0.85  # 80 GB cards (H100, A100 80GB)
+            # A100 40GB: --mem-fraction-static=0.93
             - --max-running-requests=8
             - --chunked-prefill-size=2048
             - --tool-call-parser=qwen25
@@ -69,8 +69,8 @@ spec:
             limits:
               memory: 48Gi
               nvidia.com/gpu: 1
-              # H100 80GB: nvidia.com/gpumem: 38000
-              nvidia.com/gpumem: 19500  # A100 40GB
+              nvidia.com/gpumem: 38000  # 80 GB cards (H100, A100 80GB)
+              # A100 40GB: nvidia.com/gpumem: 19500
           volumeMounts:
             - name: huggingface-cache
               mountPath: /root/.cache/huggingface
