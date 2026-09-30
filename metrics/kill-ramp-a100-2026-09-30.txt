@@ -1,0 +1,120 @@
+# Kill worker-b under load with ramp - A100 80GB, 30 September 2026, 20:33 UTC
+# Release e423a2f (`make kill`): 8 concurrent, 800 requests via experiments/load.py;
+# sglang-1 deleted 10 s in.
+
+## Run 1 - confounded by the tenant window
+$ make kill
+pod "sglang-1" deleted from default namespace
+concurrency=8 requests=800 max_tokens=128 seconds=57.7
+outcomes={200: 184, 502: 4, 429: 612}
+ok_latency_s p50=2.28 p99=3.64 max=3.76
+# load.py sends no X-Tenant, so all 800 requests share tenant "default"; after
+# ~160 requests its 200,000-token/60 s budget was spent and the rest got 429
+# tenant_tokens. The tenant window worked as designed but masks the kill test.
+# Only 4 x 502 (requests in flight on worker-b); on 29 Sep before the passive
+# health fix it was 735.
+
+$ sudo docker compose -p course-assistant logs --since=4m gateway | grep -E "worker-b|30002/health|30002/v1/models|ramp|WARNING" | tail -20
+gateway-1  | 2026-09-30 20:33:19,859 INFO gateway.execution.hops KV hop worker-b -> worker-a prefix=723b8a4e735f4251 tokens=922 backend=recompute
+gateway-1  | 2026-09-30 20:33:57,260 WARNING gateway.monitoring.polling Worker refresh failed for worker-b: All connection attempts failed
+gateway-1  | 2026-09-30 20:34:02,263 WARNING gateway.monitoring.polling Worker refresh failed for worker-b: All connection attempts failed
+... (every 5 s) ...
+
+$ curl -s localhost:19090/api/v1/alerts | ...
+TtftSloBreach firing worker-a
+TtftSloBreach firing worker-b
+HighShedRate firing
+
+$ curl -s localhost:19090/api/v1/alerts | ...   (twice, ~1 min after the kill)
+TtftSloBreach firing worker-a
+TtftSloBreach firing worker-b
+HighShedRate pending
+WorkerDown pending worker-b
+# WorkerDown detected worker-b down (pending) but did not reach its `for: 1m`
+# before the pod was back: the for-period suppresses an alarm for a short restart.
+
+## Run 2 - load tenant given a large budget (GATEWAY_TENANT_MAX_TOKENS=100000000 in .env)
+$ sudo k3s kubectl wait --for=condition=Ready pod/sglang-1 --timeout=300s && sleep 45 && make kill
+pod/sglang-1 condition met
+pod "sglang-1" deleted from default namespace
+concurrency=8 requests=800 max_tokens=128 seconds=185.2
+outcomes={200: 800}
+ok_latency_s p50=1.57 p99=3.35 max=3.77
+
+$ sudo docker compose -p course-assistant logs --since=3m gateway | grep -E "30002|worker-b|WARNING" | grep -v "30002/metrics" | tail -25
+gateway-1  | 2026-09-30 20:38:07,449 WARNING gateway.monitoring.polling Worker refresh failed for worker-b: All connection attempts failed
+... (every 5 s until) ...
+gateway-1  | 2026-09-30 20:39:32,510 WARNING gateway.monitoring.polling Worker refresh failed for worker-b: All connection attempts failed
+gateway-1  | 2026-09-30 20:39:38,514 INFO httpx HTTP Request: GET http://host.docker.internal:30002/health "HTTP/1.1 200 OK"
+gateway-1  | 2026-09-30 20:39:38,517 INFO httpx HTTP Request: GET http://host.docker.internal:30002/v1/models "HTTP/1.1 200 OK"
+gateway-1  | 2026-09-30 20:39:41,964 INFO httpx HTTP Request: POST http://host.docker.internal:30002/v1/chat/completions "HTTP/1.1 200 OK"
+gateway-1  | 2026-09-30 20:39:45,160 INFO httpx HTTP Request: POST http://host.docker.internal:30002/v1/chat/completions "HTTP/1.1 200 OK"
+gateway-1  | 2026-09-30 20:39:48,362 INFO httpx HTTP Request: POST http://host.docker.internal:30002/v1/chat/completions "HTTP/1.1 200 OK"
+gateway-1  | 2026-09-30 20:39:51,679 INFO httpx HTTP Request: POST http://host.docker.internal:30002/v1/chat/completions "HTTP/1.1 200 OK"
+gateway-1  | 2026-09-30 20:39:54,883 INFO httpx HTTP Request: POST http://host.docker.intern...
+
+# 800/800 completed, 0 failures, although worker-b was down for ~2 minutes of the
+# run (29 Sep before the fixes: 64 ok, 735 x 502). Recovery: health 200, models 200,
+# then five sequential warmup completions (~3.2 s each on the A100 under load) on
+# the shared prefix before the worker is marked ready.
+
+$ sudo docker compose -p course-assistant logs --since=6m gateway | grep "30002/v1/chat" | awk '{print $4}' | cut -d, -f1 | uniq -c | tail -40
+      1 20:36:14      <- warmups after the previous kill
+      1 20:36:17
+      1 20:36:20
+      1 20:36:24
+      1 20:36:26
+      5 20:37:07      <- run 2 starts: worker-b shares the load (~4 per 3 s)
+      4 20:37:10
+      4 20:37:13
+      4 20:37:16
+      4 20:37:19
+      4 20:37:23
+      4 20:37:26
+      4 20:37:29
+      4 20:37:32      <- worker-b killed
+      1 20:39:41      <- five warmup completions after it returns
+      1 20:39:45
+      1 20:39:48
+      1 20:39:51
+      1 20:39:54
+# No user request reached worker-b in the ~16 s between becoming ready and the end
+# of the run. Interplay of two policies: the ramp starts it at limit 1 and adds a
+# load penalty of (dispatch_max - ramp_limit) = 7, shrinking as the limit doubles
+# per 5 s poll; prefix_then_load prefers worker-a, the only holder of the shared
+# prefix after worker-b's prefixes were forgotten, while it is within the slack (4)
+# of the least loaded worker. With 8 clients worker-a's load never exceeds 8, so the
+# cold returning worker only takes traffic once the ramp is complete. A longer run
+# (1,600 requests) was started to observe it.
+
+## Run 3 - long run to observe the ramp (1,200 requests, sglang-1 deleted 10 s in)
+$ (sleep 10 && sudo k3s kubectl delete pod sglang-1 --wait=false) &
+$ $C run --rm --no-deps -T -e CONCURRENCY=8 -e REQUESTS=1200 --entrypoint /app/.venv/bin/python gateway - < experiments/load.py
+pod "sglang-1" deleted from default namespace
+concurrency=8 requests=1200 max_tokens=128 seconds=335.5
+outcomes={200: 1200}
+ok_latency_s p50=1.56 p99=3.30 max=3.52
+
+$ $C logs --since=8m gateway | grep "30002/v1/chat" | awk '{print $4}' | cut -d, -f1 | uniq -c | tail -70
+      4 20:50:57      <- worker-b shares the load (~4 per 3 s)
+      ... (4 every ~3 s) ...
+      4 20:51:39      <- then killed
+      1 20:53:51      <- five warmup completions on the shared prefix
+      1 20:53:54
+      1 20:53:57
+      1 20:54:00
+      1 20:54:03
+                      <- 19 s with no user request to worker-b (ramp limit 1 + penalty)
+      3 20:54:22      <- first user requests
+      1 20:54:25
+      3 20:54:26
+      4 20:54:29      <- back to its normal share (~4 per 3 s) within ~7 s
+      4 20:54:32
+      ... (steady until the end) ...
+      4 20:56:35
+
+# 1,200/1,200 completed with a worker down for ~2 minutes of the run.
+# Before (29 Sep, H100, no ramp): 8 user requests within 2 s of the warmup (slam).
+# After: 0 user requests for 19 s after the warmup, then back to the normal share
+# within ~7 s. With 8 clients in total each worker carries ~4 in flight, so the ramp
+# shows as a delayed re-entry rather than a visible 1 -> 2 -> 4 -> 8 staircase.

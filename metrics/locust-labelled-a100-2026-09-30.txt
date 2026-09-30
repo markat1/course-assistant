@@ -1,0 +1,105 @@
+# Labelled Class 7 mix on the A100 80GB - 30 September 2026, 20:26-20:29 UTC
+# Host: Lambda 1x NVIDIA A100-SXM4-80GB (81,920 MiB, driver 580.105.08); H100 was
+# unavailable. Same slices as on the H100: 2 x 38,000 MiB HAMi, mem-fraction 0.85.
+# Release ebd2d8f: tenant token window (200,000 tokens / 60 s per tenant), per-worker
+# priority queue (interactive before batch), prefix_then_load (slack 4), ramp.
+# Locust (experiments/locustfile.py): 28 interactive users and 4 agent users, each its
+# own tenant student-N; 8 batch users sharing tenant revision-batch; 40 users, 3 min.
+# NOTE: latency is not comparable with the 29 Sep H100 runs (different GPU).
+# Locust percentiles include failed requests (batch p50 5000 ms = the queue deadline).
+
+[2026-09-30 20:26:40,314] ...: All users spawned: {"AgentUser": 4, "BatchUser": 8, "InteractiveUser": 28} (40 total users)
+Type     Name            # reqs      # fails |    Avg     Min     Max    Med |   req/s  failures/s
+POST     agent              167     0(0.00%) |   3040     868    6192   2800 |    0.93        0.00
+POST     batch              207  178(85.99%) |   3132       2    6863   5000 |    1.15        0.99
+POST     interactive        721     0(0.00%) |   4522    1125    9444   4300 |    4.01        0.00
+         Aggregated        1095  178(16.26%) |   4033       2    9444   4100 |    6.09        0.99
+
+Response time percentiles (approximated)
+Type     Name            50%    66%    75%    80%    90%    95%    98%    99%  99.9% 99.99%   100% # reqs
+POST     agent           2800   3500   4100   4300   4900   5500   6000   6100   6200   6200   6200    167
+POST     batch           5000   5000   5000   5000   5000   5600   6400   6600   6900   6900   6900    207
+POST     interactive     4300   5200   5800   6100   7200   7800   8500   8800   9400   9400   9400    721
+         Aggregated      4100   5000   5200   5700   6700   7500   8200   8600   8900   9400   9400   1095
+
+Error report
+# occurrences      Error
+102                POST batch: HTTP 504
+76                 POST batch: HTTP 429
+
+# Interpretation
+# - Tenant window: 76 x 429 tenant_tokens, all on revision-batch; no student failed.
+# - Priority: interactive and agent 0 failures; batch starved to its deadline:
+#   102 x 504 timeout_queue. One 5 s queue deadline for every class does not fit
+#   batch (Abi's Class 7 trace gives batch 30 s): per-class deadlines are the fix.
+# - A clean p99 spread needs a FIFO baseline on the same GPU.
+
+## Gateway counters after the run
+$ curl -s localhost:8780/metrics | grep -E "^orch_(shed_total|hop_total|hop_evictions_total|overflow_total|guard)"
+orch_shed_total{code="504",reason="timeout_queue"} 103.0
+orch_shed_total{code="429",reason="tenant_tokens"} 76.0
+orch_overflow_total{code="504",decision="stay"} 103.0
+orch_overflow_total{code="429",decision="stay"} 76.0
+orch_hop_total{backend="recompute",dst="worker-b",src="worker-a"} 1.0
+orch_hop_total{backend="recompute",dst="worker-a",src="worker-b"} 1.0
+orch_hop_evictions_total{cause="worker_lost"} 0.0
+orch_hop_evictions_total{cause="capacity"} 0.0
+
+# - 429 and 504 were all classified "stay": nothing left the cluster.
+# - Hops: 2 in total (one per direction). With the set-based ledger and
+#   prefix_then_load, each of the two shared prefixes (Tutor, agent) was recomputed
+#   once on the second worker; afterwards both workers held both prefixes. Batch
+#   documents are unique, so their first placement is not a hop. The 29 Sep figure
+#   (399 hops, 431k tokens) came from the old last-owner ledger and overcounted.
+# - A slack 0 vs 4 comparison would also show ~2 hops, so it was skipped.
+
+## Prometheus alerts right after the Locust run (monitoring/alerts.yaml)
+$ curl -s localhost:19090/api/v1/alerts | python3 -c "...alertname, state, worker..."
+TtftSloBreach pending worker-b
+TtftSloBreach firing worker-a
+HighShedRate pending
+HighShedRate pending
+# TtftSloBreach fired on real load: engine p99 TTFT above 1 s for 5 minutes on
+# worker-a while 40 users saturated the A100. HighShedRate went pending on the
+# batch sheds (tenant_tokens and timeout_queue above 5 % of requests).
+
+## Second run, 21:01-21:03 UTC, tenant window effectively off
+# GATEWAY_TENANT_MAX_TOKENS=100000000 had been set for the kill test, so no tenant
+# was limited. Same labelled mix, 40 users, 2 minutes (`make locust MINUTES=2`).
+Type     Name            # reqs      # fails |    Avg     Min     Max    Med |   req/s  failures/s
+POST     agent              109     0(0.00%) |   2996     982    5855   2700 |    0.91        0.00
+POST     batch               99   72(72.73%) |   5240    2249    8956   5000 |    0.83        0.60
+POST     interactive        478     2(0.42%) |   4382       2    9808   4000 |    3.99        0.02
+         Aggregated         686   74(10.79%) |   4286       2    9808   4100 |    5.73        0.62
+
+Response time percentiles (approximated)
+POST     agent           2700   3400   3900   4100   4800   5100   5700   5800   5900   5900   5900    109
+POST     batch           5000   5000   5000   5000   6700   7700   8300   9000   9000   9000   9000     99
+POST     interactive     4000   5000   5600   6300   7400   7800   8600   9100   9800   9800   9800    478
+
+Error report
+72                 POST batch: HTTP 504
+2                  POST interactive: HTTP 503
+
+# With the tenant window (run 1) batch was refused early and cheaply: 76 x 429 with
+# Retry-After before taking a queue slot, plus 102 x 504. Without it (run 2) the
+# priority queue alone pushes batch to its 5 s deadline: 72 of 99 batch requests
+# end as 504 after waiting. Interactive p99 is similar (8.8 s vs 9.1 s): the A100
+# is saturated by 40 users in both runs. Part 5 notebook (WINDOW_MIN=10, run after
+# this): 73 x timeout_queue, 0 queue_full, 0 engine retractions, peak KV 8.6-8.8 %.
+
+## Gateway counters at 21:04 UTC (since the gateway restart at ~20:36 for the kill tests)
+$ make counters
+orch_shed_total{code="504",reason="timeout_queue"} 73.0
+orch_shed_total{code="503",reason="queue_full"} 2.0
+orch_overflow_total{code="504",decision="stay"} 73.0
+orch_overflow_total{code="503",decision="leave_disabled"} 2.0
+orch_hop_total{backend="recompute",dst="worker-a",src="worker-b"} 2.0
+orch_hop_total{backend="recompute",dst="worker-b",src="worker-a"} 3.0
+orch_hop_evictions_total{cause="capacity"} 0.0
+orch_hop_evictions_total{cause="worker_lost"} 2.0
+# - The two interactive 503s were queue_full; as 503s they are exactly the requests
+#   that may leave: counted leave_disabled (the traffic the overflow worker would get).
+# - hop_evictions_total{worker_lost} = 2: one per kill test since the restart; the
+#   ledger forgot the dead worker's prefixes, preventing ghost placements.
+# - 5 recompute hops: shared prefixes rebuilt after a restarted worker lost its cache.

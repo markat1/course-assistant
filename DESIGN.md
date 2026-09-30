@@ -4,6 +4,11 @@ The answers to the final project questions, each pointing at code or a scrape.
 Items marked **GAP** are not implemented or not yet proven on the GPU; they are
 listed together in [Open work](#open-work).
 
+**Hardware per session.** 29 Sep: Lambda 1x H100 80GB SXM5. 30 Sep: Lambda 1x
+A100-SXM4-80GB (no H100 was free), with the same two 38,000 MiB HAMi slices and
+engine flags. Behavioural results (sheds, priority, hops, ramp, abort, alerts)
+are valid on both; **latencies are only compared within the same GPU**.
+
 ## Part 0. The application
 
 **Track B, tool-using agent, with retrieval as its tool.** Students ask
@@ -99,7 +104,10 @@ limiter; raising it to 8 gave 3.3x throughput (same file). After the scheduler,
 the next limiter is **compute/HBM bandwidth**, because HAMi slices the memory,
 not the SMs. Both workers share one H100's compute. A single worker alone
 reached ~1,000 generated tok/s at 8 concurrent requests
-(`metrics/kill-worker-under-load-2026-09-29.txt`).
+(`metrics/kill-worker-under-load-2026-09-29.txt`). On the A100 80GB (same slices)
+the labelled Class 7 mix with unique batch documents peaked at **8.8 % KV** with
+**0 engine retractions** (Part 5 notebook, `metrics/locust-labelled-a100-2026-09-30.txt`):
+KV is still far from being the limiter.
 
 ## Part 2. The cluster
 
@@ -205,8 +213,16 @@ The app sends `X-Tenant` from `APP_TENANT` (default `course-assistant`) on every
 agent step (`app/lifespan.py`, `default_headers`). In `experiments/locustfile.py`
 each interactive and agent user is its own `student-N` tenant (~20k tokens/min),
 while all batch users share `revision-batch` (~600k tokens/min offered), so the
-batch tenant is expected to hit `tenant_tokens` while students pass. **GAP**: not
-yet run on the GPU.
+batch tenant is expected to hit `tenant_tokens` while students pass.
+
+**Evidence (A100, 3-minute labelled mix):** 76 x 429 `tenant_tokens`, all on
+`revision-batch`; 28 interactive and 4 agent students had **0 failures**. All 76
+were classified `stay` (`orch_overflow_total{code="429",decision="stay"}`). With
+the window effectively off (a second run), the priority queue alone pushed batch
+to its deadline: 72 of 99 batch requests ended as 504 after waiting. The window
+refuses the heavy tenant **early and cheaply** (429 + Retry-After before it takes
+a queue slot) instead of letting it wait for a 504
+(`metrics/locust-labelled-a100-2026-09-30.txt`).
 
 **`should_shed(req, snap) -> (shed, code, reason, retry_after_seconds)`.** The brief's
 single function is implemented as an ordered pipeline in `gateway/main.py:chat_completions`,
@@ -261,9 +277,23 @@ load(worker) = gateway_queue_depth + gateway_in_flight + engine_waiting
   (`metrics/warmup-first-token-2026-09-29.txt`). Before (random ties, no
   affinity) half of all placements moved the prefix (~200 hops each way in
   `metrics/guard-overflow-hops-2026-09-30.txt`). Tests: `tests/unit/test_routing.py`,
-  `tests/integration/test_prefix_placement.py`. **GAP**: re-measure hops and
-  p99 on the GPU.
+  `tests/integration/test_prefix_placement.py`.
+  **Evidence (A100):** a 3-minute labelled mix gave **2 hops in total** (one each
+  way): each shared prefix (Tutor, agent) was recomputed once on the second
+  worker, after which both held it; unique batch documents are not hops. The
+  earlier 399 hops came from the last-owner ledger and over-counted. After two
+  kill tests: 5 recompute hops and `orch_hop_evictions_total{cause="worker_lost"} 2`
+  (`metrics/locust-labelled-a100-2026-09-30.txt`).
 - Prefill and decode use the same scorer because the replicas are colocated.
+
+**`pick(req, workers, *, policy)`.** `select_worker` is our `pick`; it returns a
+worker, or `None`, which becomes the shed 503 `no_eligible_workers`. The policy is
+set by configuration rather than a parameter: `prefix_load_slack = 0` gives
+least-loaded with random tie-break (prefix only breaks ties), `> 0` gives
+`prefix_then_load`. **p2c** (sample two workers, take the less loaded) is
+identical to least-loaded with two workers, because the sample is always both;
+it only pays off with many replicas, where scoring all of them is costly and
+stale metrics make everyone pick the same "least loaded" one.
 
 ## Part 5. Queue: what runs next, and what does not
 
@@ -276,21 +306,24 @@ admit -> place -> gateway queue (per worker, FIFO, 16) -> dispatch (8 per worker
 |---|---|
 | Who sits in my queue vs the engine's? | Gateway queue: requests admitted but not dispatched (`gateway_queue_depth`). Engine waiting: dispatched but not yet running (`sglang:num_queue_reqs`). Because the dispatch cap (8) equals `--max-running-requests` (8), the engine queue stays ~0 and the backlog is visible in the gateway, where it can still be shed. |
 | Waiting / running / retracted? | `sglang:num_queue_reqs`, `sglang:num_running_reqs`, `sglang:num_retracted_reqs`, all on the "Engine and Queues" dashboard. |
-| Queue depth per pod? | `orch_replica_queue_depth{worker}` (waiting in our queue) and `orch_replica_in_flight{worker}` (dispatched, not finished), set from `WorkerState` on every `/metrics` scrape (`gateway/main.py:metrics`). Next to `sglang:num_queue_reqs` this shows who waits where. Tests: `tests/integration/test_queue_depth_metrics.py`. **GAP**: Grafana panel and GPU scrape under the labelled mix. |
+| Queue depth per pod? | `orch_replica_queue_depth{worker}` (waiting in our queue) and `orch_replica_in_flight{worker}` (dispatched, not finished), set from `WorkerState` on every `/metrics` scrape (`gateway/main.py:metrics`). Next to `sglang:num_queue_reqs` this shows who waits where. Tests: `tests/integration/test_queue_depth_metrics.py`. Grafana panel "Gateway queue depth and in-flight per worker"; notebook plot `plots/part5-queue-depth-by-pod.png` over the labelled mix on the A100. |
 | 32k RAG retrieve vs short agent decode? | A 32k prompt never gets in: guard rejects it (`prompt_too_long`, context 8192). Inside 8k, **we** decide the order in our queue: interactive before batch (below). Once dispatched, **the engine** decides: `--chunked-prefill-size=2048` splits a long prefill so running decodes keep stepping. |
-| Interactive vs batch in my queue? | Each worker queue is an `asyncio.PriorityQueue` (`gateway/lifespan.py:create_queues`). `X-Request-Class: interactive\|batch` (default `interactive`; unknown → 400 `bad_request_class` at the guard) maps to a priority in `gateway/policies/priority.py`; `QueuedRequest` orders by (priority, arrival) so a class stays FIFO (`gateway/models/queued_request.py`). Batch can starve while interactive keeps arriving and then expires as `timeout_queue` (504): a deliberate "what we do not run". This orders only our queue; it is not the engine scheduler. Tests: `tests/unit/test_request_priority.py`, `tests/integration/test_request_class.py`. |
+| Interactive vs batch in my queue? | Each worker queue is an `asyncio.PriorityQueue` (`gateway/lifespan.py:create_queues`). `X-Request-Class: interactive\|batch` (default `interactive`; unknown → 400 `bad_request_class` at the guard) maps to a priority in `gateway/policies/priority.py`; `QueuedRequest` orders by (priority, arrival) so a class stays FIFO (`gateway/models/queued_request.py`). Batch can starve while interactive keeps arriving and then expires as `timeout_queue` (504): a deliberate "what we do not run". This orders only our queue; it is not the engine scheduler. Tests: `tests/unit/test_request_priority.py`, `tests/integration/test_request_class.py`. **Evidence (A100):** interactive and agent 0 failures; batch 102 x 504 (with the tenant window) and 72 of 99 x 504 (without). **Lesson:** one 5 s queue deadline for every class does not fit batch (Abi's Class 7 trace gives batch 30 s); a per-class deadline is the next change. |
 | PagedAttention vs radix cache: which saved memory on the shared-prefix mix? | The radix cache. SGLang's token pool avoids fragmentation, but the savings on our mix come from reuse: ~97 % cache hit in Grafana, and a warm request recomputes 15–17 tokens instead of ~1,670 (`metrics/warmup-first-token-2026-09-29.txt`, `#cached-token: 1656`). |
 | Chunked prefill / batching flags | `--chunked-prefill-size=2048` (limits prefill per step, protects decode TPOT); `--max-running-requests=8` (decode CUDA graphs captured for bs 1, 2, 4, 8); `max_prefill_tokens=16384` (default). |
-| KV full after admit? | The gateway admits only below 90 % KV; after that the engine retracts (`num_retracted_reqs`). Not reached in any run (KV ≤ 1 %). The gateway does not fix OOM; it only avoids adding work above the limit. |
-| Client gone? | Streaming: a client disconnect closes the gateway→engine stream, SGLang aborts the request and frees its KV. The shared prefix stays in the radix cache as evictable cache. Queue: `forward_until_done` cancels the upstream task when the request's result is already done (e.g. expired). **GAP**: prove the abort on the GPU (engine running count drops). |
-| Worker returns: slam or ramp? | Ramp. Before, it slammed: 8 requests within 2 s of warmup (`metrics/kill-worker-under-load-2026-09-29.txt`, recovery timeline). Now a worker that becomes ready starts at `ramp_limit = 1` (`gateway/monitoring/polling.py:refresh_worker`); each metrics poll (5 s) doubles it up to the dispatch cap (1 → 2 → 4 → 8 in 15 s) while the engine queue is empty, and halves it when `sglang:num_queue_reqs > 0` (`gateway/policies/ramp.py`). The engine queue is our proxy for "p99 holds": once SGLang makes requests wait, TTFT is rising. Routing adds `dispatch_max − ramp_limit` to the worker's load (`gateway/policies/routing.py:gateway_load`), so a returning worker gets traffic only when the warm one is busier. It is a soft cap: if the warm worker is full, the ramping one still serves rather than shedding. Tests: `tests/unit/test_ramp.py`, `tests/integration/test_worker_ramp.py`, `tests/integration/test_prefix_placement.py`. **GAP**: repeat the kill-worker run on the GPU. |
+| KV full after admit? | The gateway admits only below 90 % KV; after that the engine retracts (`num_retracted_reqs`). Not reached in any run: peak KV 8.8 %, 0 retractions (A100 labelled mix, notebook). The gateway does not fix OOM; it only avoids adding work above the limit. |
+| Client gone? | Streaming: a client disconnect closes the gateway→engine stream, SGLang aborts the request and frees its KV. The shared prefix stays in the radix cache as evictable cache. Queue: `forward_until_done` cancels the upstream task when the request's result is already done (e.g. expired). **Evidence (A100):** a streaming request with `max_tokens` 1000 (~15-25 s of decode); the client leaves after 2 s -> 3 s after the start `sglang:num_running_reqs` is 0 on both workers; control with the client staying -> 1.0 (`metrics/client-abort-a100-2026-09-30.txt`, `make abort`). |
+| Worker returns: slam or ramp? | Ramp. Before, it slammed: 8 requests within 2 s of warmup (`metrics/kill-worker-under-load-2026-09-29.txt`, recovery timeline). Now a worker that becomes ready starts at `ramp_limit = 1` (`gateway/monitoring/polling.py:refresh_worker`); each metrics poll (5 s) doubles it up to the dispatch cap (1 → 2 → 4 → 8 in 15 s) while the engine queue is empty, and halves it when `sglang:num_queue_reqs > 0` (`gateway/policies/ramp.py`). The engine queue is our proxy for "p99 holds": once SGLang makes requests wait, TTFT is rising. Routing adds `dispatch_max − ramp_limit` to the worker's load (`gateway/policies/routing.py:gateway_load`), so a returning worker gets traffic only when the warm one is busier. It is a soft cap: if the warm worker is full, the ramping one still serves rather than shedding. Tests: `tests/unit/test_ramp.py`, `tests/integration/test_worker_ramp.py`, `tests/integration/test_prefix_placement.py`. **Evidence (A100, 1,200 requests, worker-b killed 10 s in):** 1,200/1,200 completed; on return: health, models, five warmup completions, then **0 user requests for 19 s** (ramp limit 1 + penalty, and prefix affinity to the warm holder), then back to its normal share (~4 per 3 s) within ~7 s. With 8 clients each worker carries ~4 in flight, so the ramp shows as a delayed re-entry, not a visible 1->2->4->8 staircase (`metrics/kill-ramp-a100-2026-09-30.txt`). |
 
 **Notebook:** `notebook/part5_queue.ipynb` answers these from a live Prometheus
 scrape (queue table per worker, queue depth by pod, door sheds vs engine
 retractions, radix cache vs KV usage, hops and sheds, ramp after a kill) and
 saves its plots to `plots/`. Query helpers: `experiments/prometheus_snapshot.py`
-(tested in `tests/unit/test_prometheus_snapshot.py`). **GAP**: run it with
-outputs during the GPU session.
+(tested in `tests/unit/test_prometheus_snapshot.py`). **Run with outputs** against the
+live A100 cluster (all four targets up): plots `plots/part5-queue-depth-by-pod.png`,
+`part5-shared-prefix-kv.png`, `part5-hops-and-sheds.png`, `part5-ramp-after-return.png`.
+Run it with `PROM_URL=http://127.0.0.1:29090 WINDOW_MIN=15 uv run --with jupyter
+--with matplotlib jupyter nbconvert --to notebook --execute --inplace notebook/part5_queue.ipynb`.
 
 ## Part 6. Hop and warmup
 
@@ -355,7 +388,11 @@ stay-or-leave decisions):
   queued per worker, KV usage, TTFT p50/p99, generated tok/s, prefix cache hit
   rate and retracted requests.
 
-Screenshots: `plots/grafana-2026-09-29/`.
+Screenshots: `plots/grafana-2026-09-29/`; notebook plots `plots/part5-*.png`.
+- **Success and failures:** failures per reason are on the sheds and stay-or-leave
+  panels; there is no dedicated completions-by-status panel yet (Open work).
+- **Pods / replicas / KEDA:** no autoscaling. Two fixed replicas on one GPU; the
+  scaling answer is below ("If I scale, which pool?").
 
 | Question | Answer and evidence |
 |---|---|
@@ -363,34 +400,37 @@ Screenshots: `plots/grafana-2026-09-29/`.
 | What dies at guard / admit / place / queue? | Guard: `bad_max_tokens`, `prompt_too_long` (400). Admit: `kv_pressure`, `no_eligible_workers` (503). Place: `no_eligible_workers` (503). Queue: `queue_full` (503), `timeout_queue` (504). `orch_shed_total`, `orch_guard_rejected_total` |
 | Where do I prevent work that will time out? | Queue deadline in `gateway/execution/waiting.py` and `dispatch.py`: an expired request is never dispatched (504 `timeout_queue`). Seen as 24 × 504 at dispatch cap 2 and 0 after the cap fix (`metrics/load-gateway-2026-09-29.txt`) |
 | Where do I protect KV? | Admission `kv_usage_limit` 0.90 on fresh metrics; dispatch cap = `max_running_requests`; guard caps prompt + output ≤ 8192 |
-| Where do I prioritize interactive traffic? | Gateway priority queue per worker (Part 5). Before, with FIFO: interactive p99 6.0 s vs batch 4.4 s, spread +1.6 s (`metrics/locust-class7-mix-2026-09-29.txt`). **GAP**: re-run the labelled Locust mix on the GPU and compare the spread. |
-| Where do I stop one tenant owning the GPU? | `gateway/policies/tenant_window.py` (Part 3), 429 `tenant_tokens`. **GAP**: GPU evidence. |
+| Where do I prioritize interactive traffic? | Gateway priority queue per worker (Part 5). Before, with FIFO (H100): interactive p99 6.0 s vs batch 4.4 s (`metrics/locust-class7-mix-2026-09-29.txt`). With priority (A100): interactive and agent 0 failures while batch is pushed to its deadline (102 x 504). A clean same-GPU p99 spread needs a FIFO baseline on the A100: not measured (Open work). |
+| Where do I stop one tenant owning the GPU? | `gateway/policies/tenant_window.py` (Part 3): 76 x 429 `tenant_tokens`, all on `revision-batch`, 0 failures for students (`metrics/locust-labelled-a100-2026-09-30.txt`). |
 | Where do I hop; what is not copied? | Part 6 |
 | Where do I evict; what becomes a ghost? | Part 6: `forget_worker` on a lost worker (else its prefixes are ghosts: the ledger would call an empty cache warm) and ledger LRU; both counted in `orch_hop_evictions_total{cause}`. SGLang's own radix-cache eviction is inside the engine and not visible to the ledger. |
 | Engine scheduler vs my admit/place/queue? | Part 2, "Two boxes"; Part 5 |
 | What limited concurrency? | `max_running_requests=8` (and before that the gateway dispatch cap 2), not KV: Part 1 |
-| Four production alerts | `monitoring/alerts.yaml`, loaded by both Prometheus configs: **KvCachePressure** (`sglang:full_token_usage > 0.85` for 2 m: just under the 0.90 admission limit, so `kv_pressure` sheds or engine retractions are next), **TtftSloBreach** (engine p99 TTFT > 1 s for 5 m per worker; warm TTFT is 18–35 ms, so 1 s means queueing), **HighShedRate** (> 5 % of chat requests shed, per reason, for 5 m: names *which* decision is refusing work), **WorkerDown** (`up{job="sglang"} == 0` for 1 m: capacity halved). Unit-tested with `promtool test rules monitoring/tests/alerts_test.yaml`. |
+| Four production alerts | `monitoring/alerts.yaml`, loaded by both Prometheus configs: **KvCachePressure** (`sglang:full_token_usage > 0.85` for 2 m: just under the 0.90 admission limit, so `kv_pressure` sheds or engine retractions are next), **TtftSloBreach** (engine p99 TTFT > 1 s for 5 m per worker; warm TTFT is 18–35 ms, so 1 s means queueing), **HighShedRate** (> 5 % of chat requests shed, per reason, for 5 m: names *which* decision is refusing work), **WorkerDown** (`up{job="sglang"} == 0` for 1 m: capacity halved). Unit-tested with `promtool test rules monitoring/tests/alerts_test.yaml`. **Live (A100):** TtftSloBreach fired on both workers and HighShedRate fired under the labelled mix; WorkerDown went pending when a worker was killed and did not fire because the pod returned within its 1 m `for` window; KvCachePressure did not fire (KV ≤ 8.8 %). |
 | If I scale, which pool? | Colocated replicas, so there is one pool, and on our mix the pressure is **decode slots** (97 % prefix hits make uncached prefill small). The first step is raising `--max-running-requests` while KV is at ~1 % and TPOT holds; after that, more GPU compute. Not "add a replica of the same size on the same GPU": that splits the same SMs and duplicates the prefix KV. |
 | 10× traffic; three wrong knobs | 10×: tenant windows and interactive priority first; overflow for 503 only; raise engine concurrency against a TPOT SLO; a second physical GPU for compute. Wrong knobs: (1) raise `queue_max_size`/`queue_timeout_s` (hides overload as TTFT); (2) raise `kv_usage_limit` toward 1.0 (turns sheds into engine retractions); (3) add more HAMi replicas on the same GPU (same compute, less KV each, more hops). |
 
 ## Open work
 
-Can be done without a GPU (code and tests), then proven on the GPU:
+Done and proven on the GPU (see the parts above): tenant window, interactive
+priority, `prefix_then_load` with the per-prefix holder set, queue depth per
+worker, evictions against ghosts, ramp for a returning worker, client abort,
+four alerts (three observed live), the overflow decision, the Part 5 notebook with
+outputs, GPU cost reasoning.
 
-1. ~~Tenant token window~~: done in code (Part 3); needs GPU evidence.
-2. ~~Interactive before batch~~: done in code, app and Locust traffic labelled
-   (Part 5); needs GPU evidence (p99 spread).
-3. ~~`prefix_then_load` placement + per-prefix worker set~~: done in code
-   (Part 4, Part 6); needs GPU evidence (hops and p99 before/after).
-4. ~~Export `orch_replica_queue_depth{worker}` and an evict counter~~: done in
-   code (Part 5, Part 6); needs a Grafana panel and a GPU scrape.
-5. ~~Ramp for a returning worker~~: done in code (Part 5); needs the kill-worker run on the GPU.
-6. ~~Four alerts~~ and Grafana panels for queue depth, hops/evictions and overflow: done (`monitoring/alerts.yaml`, `engine.json`).
-7. ~~Name the overflow model~~: decided (Part 3, "Overflow recipient"): Qwen3-8B on
-   one owned 24 GB GPU; forwarding leaves to it is not implemented.
-8. ~~Notebook~~: written (`notebook/part5_queue.ipynb`); run it with outputs on the GPU.
-9. GPU cost/availability reasoning in Part 2.
+Still open, in order of value:
 
-Needs the GPU: live evidence for items 1–5 (tenant sheds on `revision-batch`,
-p99 spread with priority), capacity at `max_running_requests`
-> 8, a client-abort proof and the notebook run against live Prometheus.
+1. **Per-class queue deadline** (batch ~30 s, interactive 5 s): today batch ends
+   as 504 after waiting.
+2. **Predictive `timeout_queue`**: refuse before enqueue when queue depth x recent
+   service time exceeds the deadline (503) instead of 504 after the wait.
+3. **Overflow forwarding**: the recipient is decided (Qwen3-8B on an owned 24 GB
+   GPU) but 503/529 leaves are only counted (`leave_disabled`).
+4. **Clean p99 spread on one GPU**: a FIFO baseline on the same hardware as the
+   priority run (priority cannot be switched off by configuration today).
+5. **Completions-by-status panel** ("success and failures") in Grafana.
+6. **Capacity above `--max-running-requests=8`** (e.g. 16) against a TPOT SLO.
+7. **Streaming status while tools run**: the first visible word comes after
+   Router, handoff, Tutor and the lookup.
+8. `pyproject.toml` has no `notebook` dependency group; the notebook runs with
+   `uv run --with jupyter --with matplotlib` (Part 5).

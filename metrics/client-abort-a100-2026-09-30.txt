@@ -1,0 +1,21 @@
+# Client gone: who frees the KV? - A100 80GB, 30 September 2026, ~20:58 UTC
+# Release e423a2f. A streaming request (max_tokens 1000, ~15-25 s of decode on this
+# GPU) is sent through the gateway; the client leaves after 2 s.
+
+## Client leaves after 2 s (`make abort`)
+$ make abort
+... timeout 2 curl -N -s localhost:8780/v1/chat/completions ... "max_tokens":1000,"stream":true ... ; sleep 1; curl -s localhost:30001/metrics localhost:30002/metrics | grep "^sglang:num_running_reqs"
+sglang:num_running_reqs{engine_type="unified",model_name="Qwen/Qwen3-8B",moe_ep_rank="0",pp_rank="0",tp_rank="0"} 0.0
+sglang:num_running_reqs{engine_type="unified",model_name="Qwen/Qwen3-8B",moe_ep_rank="0",pp_rank="0",tp_rank="0"} 0.0
+
+## Control: the same request, client stays, checked after 3 s
+$ curl -N -s localhost:8780/v1/chat/completions ... "max_tokens":1000,"stream":true ... >/dev/null &
+$ sleep 3; curl -s localhost:30001/metrics localhost:30002/metrics | grep "^sglang:num_running_reqs"
+sglang:num_running_reqs{engine_type="unified",model_name="Qwen/Qwen3-8B",moe_ep_rank="0",pp_rank="0",tp_rank="0"} 1.0
+sglang:num_running_reqs{engine_type="unified",model_name="Qwen/Qwen3-8B",moe_ep_rank="0",pp_rank="0",tp_rank="0"} 0.0
+
+# With the client gone the engine runs nothing 3 s after the start; with the client
+# present the request is still generating. The gateway's relay closes the engine
+# stream when the client leaves, SGLang aborts the request and releases its KV.
+# SGLang did not log an "abort" line at its default log level
+# (`kubectl logs ... | grep -i abort` was empty); the running gauge is the evidence.
