@@ -127,7 +127,8 @@ Router -> handoff -> Tutor -> tool -> gateway -> SGLang.
 
 ### Step 11 - capacity on paper vs measured (Part 1)
 
-Show the `make check` output: `max_total_num_tokens=115299`. 15.84 GiB / 115,299
+Show the `make check` output: `max_total_num_tokens=115299` on the H100, 115916 on the
+A100 80GB (`metrics/a100-sglang-capacity-2026-09-30.txt`). 15.84 GiB / 115,299
 tokens = 144 KiB/token = 2 x 36 layers x 8 KV heads x 128 x 2 bytes. ~14
 sequences at 8,192 tokens, ~57 at a ~2,000-token turn, so the engine's running
 cap (8) binds before KV. First measured limiter was our own gateway cap (2).
@@ -151,9 +152,17 @@ Grafana while it runs. Show:
 
 ### Step 13 - a worker dies and returns (Part 5 "slam or ramp", Part 6, alerts)
 
+`experiments/load.py` sends no `X-Tenant`, so all its requests share tenant `default`
+and hit the tenant window (429) instead of testing the kill. Raise the budget first
+(and remove the line again before a Locust run that should show `tenant_tokens`):
+
 ```
+echo "GATEWAY_TENANT_MAX_TOKENS=100000000" >> .env && sudo docker compose -p course-assistant -f compose.yaml -f compose.monitoring.yaml -f compose.k3s.yaml -f compose.app.yaml -f compose.ui.yaml up -d gateway
 make kill
 ```
+
+`make kill` sends 800 requests; the ramp was clearly visible with 1,200 (see
+`metrics/kill-ramp-a100-2026-09-30.txt`).
 
 Show: 0 or a handful of 502s (dead worker marked unready at once, no black hole);
 gateway log "Worker refresh failed for worker-b"; on return `/health`, `/v1/models`
@@ -178,10 +187,16 @@ closed the engine stream and SGLang aborted the request and freed its KV.
 Laptop terminal:
 
 ```
-PROM_URL=http://127.0.0.1:29090 uv run --group notebook jupyter lab notebook/part5_queue.ipynb
+PROM_URL=http://127.0.0.1:29090 WINDOW_MIN=90 uv run --with jupyter --with matplotlib jupyter lab notebook/part5_queue.ipynb
 ```
 
 Run all cells: who waits in our queue vs the engine's queue, per worker; plots.
+`WINDOW_MIN` is how far back the plots look - make it cover the runs you want to show.
+To execute and save the outputs without opening Jupyter:
+
+```
+PROM_URL=http://127.0.0.1:29090 WINDOW_MIN=90 uv run --with jupyter --with matplotlib jupyter nbconvert --to notebook --execute --inplace notebook/part5_queue.ipynb
+```
 
 ### Step 16 - warmup and hop evidence (Part 6)
 
