@@ -23,4 +23,9 @@ class AppSettings(BaseSettings):
         allow_inf_nan=False,
     )
     max_turns: int = Field(default=6, gt=0)
+    tenant: str = Field(
+        default="course-assistant",
+        min_length=1,
+        pattern=r"\S"
+    )
 

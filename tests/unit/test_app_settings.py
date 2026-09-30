@@ -51,3 +51,21 @@ def test_app_settings_reject_invalid_runtime_configuration(values):
 
     with pytest.raises(ValidationError):
         AppSettings(_env_file=None, **values)
+
+
+def test_app_tenant_defaults_to_the_course_assistant():
+    from app.models.settings import AppSettings
+
+    settings = AppSettings(_env_file=None)
+
+    assert settings.tenant == "course-assistant"
+
+
+def test_app_tenant_is_read_from_the_app_environment(monkeypatch):
+    from app.models.settings import AppSettings
+
+    monkeypatch.setenv("APP_TENANT", "course-students")
+
+    settings = AppSettings(_env_file=None)
+
+    assert settings.tenant == "course-students"

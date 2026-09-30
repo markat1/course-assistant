@@ -42,6 +42,7 @@ def runtime(monkeypatch):
             gateway_url="http://configured-gateway:8780/v1",
             request_timeout_s=45,
             max_turns=4,
+            tenant="course-students",
         )
         monkeypatch.setattr(lifecycle, "AppSettings", lambda: settings)
         monkeypatch.setattr(lifecycle, "httpx", SimpleNamespace(AsyncClient=create_http_client))
@@ -125,3 +126,34 @@ async def test_model_setup_failure_closes_created_clients(runtime, monkeypatch):
 
     assert state.sdk_clients[0].is_closed()
     assert state.http_clients[0].is_closed
+
+
+@pytest.mark.asyncio
+async def test_every_agent_step_is_sent_as_interactive_for_the_configured_tenant(runtime):
+    def gateway(request):
+        return httpx.Response(200, json={
+            "id": "completion-runtime",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "configured-model",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "Test answer."},
+                "finish_reason": "stop",
+            }],
+        })
+
+    state = runtime(gateway)
+    async with state.app.router.lifespan_context(state.app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=state.app), base_url="http://app"
+        ) as browser:
+            await browser.post("/v1/chat/completions", json={
+                "model": "course-assistant",
+                "messages": [{"role": "user", "content": "Explain KV memory."}],
+            })
+
+    assert state.requests
+    for request in state.requests:
+        assert request.headers["x-request-class"] == "interactive"
+        assert request.headers["x-tenant"] == "course-students"

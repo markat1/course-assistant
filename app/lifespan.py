@@ -21,6 +21,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
             max_retries=0,
             timeout=settings.request_timeout_s,
             http_client=http_client,
+            default_headers={
+                "X-Request-Class": "interactive",
+                "X-Tenant": settings.tenant,
+            },
         ) as client:
             app.state.model = create_model(
                 model_name=settings.model_name,

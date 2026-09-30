@@ -23,7 +23,7 @@ QUESTIONS = [
 ]
 
 
-def chat(user: HttpUser, name: str, system: str, question: str, max_tokens: int) -> None:
+def chat(user: HttpUser, name: str, system: str, question: str, max_tokens: int, *, request_class: str, tenant: str) -> None:
     payload = {
         "model": MODEL,
         "messages": [
@@ -32,7 +32,8 @@ def chat(user: HttpUser, name: str, system: str, question: str, max_tokens: int)
         ],
         "max_tokens": max_tokens,
     }
-    with user.client.post("/v1/chat/completions", json=payload, name=name, catch_response=True) as response:
+    headers={"X-Request-Class": request_class, "X-Tenant": tenant}
+    with user.client.post("/v1/chat/completions", json=payload, headers=headers, name=name, catch_response=True) as response:
         if response.status_code == 200:
             response.success()
         else:
@@ -43,9 +44,14 @@ class InteractiveUser(HttpUser):
     weight = 7
     wait_time = between(1, 3)
 
+    def on_start(self) -> None:
+        self.tenant = f"student-{random.randint(0, 10**6)}"
+
     @task
     def ask_tutor(self) -> None:
-        chat(self, "interactive", TUTOR_PREFIX, random.choice(QUESTIONS), random.randint(64, 256))
+        chat(self, "interactive", TUTOR_PREFIX, random.choice(QUESTIONS), random.randint(64, 256),
+             request_class="interactive", tenant=self.tenant)
+        
 
 
 class BatchUser(HttpUser):
@@ -55,13 +61,18 @@ class BatchUser(HttpUser):
     @task
     def summarise_document(self) -> None:
         document = f"Document {random.randint(0, 10**9)}\n" + DOCUMENT * random.randint(80, 160)
-        chat(self, "batch", "Summarise the document for revision notes.\n" + document, "Summarise it.", random.randint(256, 512))
+        chat(self, "batch", "Summarise the document for revision notes.\n" + document, "Summarise it.", random.randint(256, 512),
+             request_class="batch", tenant="revision-batch")
 
 
 class AgentUser(HttpUser):
     weight = 1
     wait_time = between(0.5, 1.5)
 
+    def on_start(self) -> None:
+        self.tenant = f"student-{random.randint(0,10**6)}"
+
     @task
     def agent_step(self) -> None:
-        chat(self, "agent", AGENT_PREFIX, "Plan the next tool call for: " + random.choice(QUESTIONS), 128)
+        chat(self, "agent", AGENT_PREFIX, "Plan the next tool call for: " + random.choice(QUESTIONS), 128,
+             request_class="interactive", tenant=self.tenant)
