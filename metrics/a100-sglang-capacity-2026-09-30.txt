@@ -1,0 +1,12 @@
+# SGLang capacity on the A100-SXM4-80GB (Lambda, 30 Sep 2026)
+# Same HAMi slice (nvidia.com/gpumem 38000) and engine flags as the H100 run
+# (metrics/h100-sxm5-hami-workers-2026-09-29.txt §7).
+
+$ sudo k3s kubectl logs sglang-0 | grep -m1 max_total_num_tokens
+[2026-09-30 20:23:29] max_total_num_tokens=115916, chunked_prefill_size=2048, max_prefill_tokens=16384, max_running_requests=8, context_len=8192, available_gpu_mem=4.51 GB
+
+# KV pool per worker: 115,916 tokens on the A100 80GB vs 115,299 on the H100 80GB
+# (same slice, same --mem-fraction-static=0.85). At 144 KiB/token:
+#   max_len 8,192   -> 14 sequences per worker
+#   agent turn 2,000 -> 57 sequences per worker
+# The capacity math in DESIGN.md Part 1 holds for both GPUs used.

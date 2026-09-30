@@ -117,6 +117,9 @@ kv_bytes_per_token = 2 (K,V) x 36 layers x 8 kv_heads x 128 dim x 2 bytes
 
 The engine's own startup log agrees: 15.84 GiB KV / 115,299 tokens ≈ 147.5 KB/token
 (`metrics/h100-sxm5-hami-workers-2026-09-29.txt` §7).
+On the A100 80GB (30 Sep, same slice and flags) SGLang reported
+`max_total_num_tokens=115916` (`metrics/a100-sglang-capacity-2026-09-30.txt`), so the
+table below holds for both GPUs used.
 
 **Per worker (one 38,000 MiB slice, measured by SGLang):**
 
@@ -350,7 +353,7 @@ stale metrics make everyone pick the same "least loaded" one.
 ## Part 5. Queue: what runs next, and what does not
 
 ```
-admit -> place -> gateway queue (per worker, FIFO, 16) -> dispatch (8 per worker)
+admit -> place -> gateway queue (per worker, priority: interactive first, 16) -> dispatch (8 per worker)
       -> SGLang waiting -> running (8) -> retracted
 ```
 
@@ -374,7 +377,7 @@ saves its plots to `plots/`. Query helpers: `experiments/prometheus_snapshot.py`
 (tested in `tests/unit/test_prometheus_snapshot.py`). **Run with outputs** against the
 live A100 cluster (all four targets up): plots `plots/part5-queue-depth-by-pod.png`,
 `part5-shared-prefix-kv.png`, `part5-hops-and-sheds.png`, `part5-ramp-after-return.png`.
-Run it with `PROM_URL=http://127.0.0.1:29090 WINDOW_MIN=15 uv run --with jupyter
+Saved run: window 22:30-00:00 on 30 Sep (`WINDOW_MIN=90`), covering the kill tests and three Locust runs. Run it with `PROM_URL=http://127.0.0.1:29090 WINDOW_MIN=90 uv run --with jupyter
 --with matplotlib jupyter nbconvert --to notebook --execute --inplace notebook/part5_queue.ipynb`.
 
 ## Part 6. Hop and warmup
