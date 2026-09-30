@@ -145,3 +145,41 @@ def test_among_several_holders_the_least_loaded_is_chosen():
     )
 
     assert selected is b
+
+
+def test_returning_worker_is_not_slammed_while_it_ramps():
+    warm = ready_worker("worker-a", in_flight=3)
+    returning = ready_worker("worker-b")
+    returning.ramp_limit = 1
+
+    selected = select_worker(
+        [warm, returning], max_metrics_age_s=10, queue_max_size=16,
+        dispatch_max=8, choose=first,
+    )
+
+    assert selected is warm
+
+
+def test_ramping_worker_takes_traffic_once_the_other_is_busier():
+    warm = ready_worker("worker-a", in_flight=8)
+    returning = ready_worker("worker-b")
+    returning.ramp_limit = 1
+
+    selected = select_worker(
+        [warm, returning], max_metrics_age_s=10, queue_max_size=16,
+        dispatch_max=8, choose=first,
+    )
+
+    assert selected is returning
+
+
+def test_fully_ramped_worker_has_no_penalty():
+    a = ready_worker("worker-a", in_flight=1)
+    b = ready_worker("worker-b")
+    b.ramp_limit = 8
+
+    selected = select_worker(
+        [a, b], max_metrics_age_s=10, queue_max_size=16, dispatch_max=8, choose=first,
+    )
+
+    assert selected is b

@@ -109,6 +109,7 @@ async def chat_completions(chat_request: ChatRequest, request: Request):
         queue_max_size=settings.queue_max_size,
         holders=prefix_holders(chat_request),
         prefix_load_slack=settings.prefix_load_slack,
+        dispatch_max=settings.dispatch_concurrency_per_worker,
     )
 
     if worker is None:

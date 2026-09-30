@@ -63,7 +63,7 @@ async def gateway(monkeypatch):
         SimpleNamespace(
             metrics_max_age_s=10.0, kv_usage_limit=0.9, queue_timeout_s=5,
             capacity_retry_after_s=7, queue_max_size=16,
-            context_length=8192, max_output_tokens=1024, prefix_load_slack=4,
+            context_length=8192, max_output_tokens=1024, prefix_load_slack=4, dispatch_concurrency_per_worker=8,
         ),
         raising=False,
     )
@@ -100,3 +100,13 @@ async def test_busy_holder_gives_way_to_an_idle_worker_and_that_is_a_hop(gateway
 
     assert response.json()["worker"] == "worker-a"
     assert hop_count() == before + 1
+
+
+@pytest.mark.asyncio
+async def test_gateway_does_not_slam_a_worker_that_is_still_ramping(gateway):
+    gateway.workers["worker-a"].gateway_in_flight = 3
+    gateway.workers["worker-b"].ramp_limit = 1
+
+    response = await gateway.client.post(CHAT_URL, json=body("Summarise the document.", "question"))
+
+    assert response.json()["worker"] == "worker-a"

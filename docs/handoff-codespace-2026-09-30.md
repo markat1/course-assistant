@@ -40,5 +40,6 @@ Done: `orch_replica_queue_depth{worker}`, `orch_replica_in_flight{worker}` (set 
 each `/metrics` scrape) and `orch_hop_evictions_total{cause=capacity|worker_lost}`.
 Done: `prefix_then_load` placement (`GATEWAY_PREFIX_LOAD_SLACK`, default 4) and
 a hop ledger that keeps the set of workers per prefix.
-Then: ramp for a returning worker, four Prometheus alert rules, notebook skeleton.
+Done: ramp for a returning worker (limit 1 → 2 → 4 → 8 per poll, halves when the engine queues).
+Then: four Prometheus alert rules, notebook skeleton.
 On the next GPU session, re-run the labelled Locust mix (tenant sheds, p99 spread).
