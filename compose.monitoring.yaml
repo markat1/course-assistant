@@ -6,6 +6,7 @@ services:
       - --storage.tsdb.path=/prometheus
     volumes:
       - ./monitoring/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alerts.yaml:/etc/prometheus/alerts.yaml:ro
       - prometheus-data:/prometheus
     ports:
       - "127.0.0.1:19090:9090"

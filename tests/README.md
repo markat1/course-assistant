@@ -8,7 +8,14 @@ uv run python -m pytest tests/unit -q
 uv run python -m pytest tests/integration -q
 ```
 
-All current tests run locally without Docker, network access or a GPU. Integration
+Alert rules have their own promtool tests (needs Docker):
+
+```bash
+docker run --rm -v "$PWD/monitoring:/monitoring" --entrypoint promtool \
+  prom/prometheus:v3.4.1 test rules /monitoring/tests/alerts_test.yaml
+```
+
+All current pytest tests run locally without Docker, network access or a GPU. Integration
 tests connect gateway components in process; HTTPX transports simulate the worker
 boundary. Passing these tests does not establish real worker readiness, GPU memory
 release, streaming latency or client-disconnect behavior.

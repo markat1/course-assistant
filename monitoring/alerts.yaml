@@ -1,0 +1,39 @@
+groups:
+  - name: course-assistant
+    rules:
+      - alert: KvCachePressure
+        expr: sglang:full_token_usage > 0.85
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "KV cache above 85 % on {{ $labels.worker }}"
+
+      - alert: TtftSloBreach
+        expr: |
+          histogram_quantile(0.99,
+            sum by (le, worker) (rate(sglang:time_to_first_token_seconds_bucket[5m]))
+          ) > 1
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "p99 time to first token above 1 s on {{ $labels.worker }}"
+
+      - alert: HighShedRate
+        expr: |
+          sum by (reason) (rate(orch_shed_total[5m]))
+            / scalar(sum(rate(orch_requests_total[5m]))) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "More than 5 % of chat requests shed as {{ $labels.reason }}"
+
+      - alert: WorkerDown
+        expr: up{job="sglang"} == 0
+        for: 1m
+        labels:
+          severity: page
+        annotations:
+          summary: "Engine {{ $labels.worker }} is not scraped; capacity is halved"

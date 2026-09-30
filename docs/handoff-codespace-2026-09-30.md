@@ -41,5 +41,7 @@ each `/metrics` scrape) and `orch_hop_evictions_total{cause=capacity|worker_lost
 Done: `prefix_then_load` placement (`GATEWAY_PREFIX_LOAD_SLACK`, default 4) and
 a hop ledger that keeps the set of workers per prefix.
 Done: ramp for a returning worker (limit 1 → 2 → 4 → 8 per poll, halves when the engine queues).
-Then: four Prometheus alert rules, notebook skeleton.
+Done: four alert rules (`monitoring/alerts.yaml`, promtool tests in
+`monitoring/tests/alerts_test.yaml`) and three new Grafana panels in `engine.json`.
+Then: notebook skeleton.
 On the next GPU session, re-run the labelled Locust mix (tenant sheds, p99 spread).

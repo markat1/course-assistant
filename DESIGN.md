@@ -289,7 +289,9 @@ Smoke before serve: direct worker checks in `metrics/h100-sxm5-hami-workers-2026
 
 ## Part 8. Proof
 
-**Dashboards** (`monitoring/grafana/dashboards/`):
+**Dashboards** (`monitoring/grafana/dashboards/`; `engine.json` also has gateway
+queue depth and in-flight per worker, KV hops and hop-ledger evictions, and
+stay-or-leave decisions):
 - `overview.json`: scrape status (gateway, Prometheus, both workers).
 - `gateway.json`: requests, sheds and placements since start.
 - `engine.json`: sheds by reason, placements per worker, engine running and
@@ -310,7 +312,7 @@ Screenshots: `plots/grafana-2026-09-29/`.
 | Where do I evict; what becomes a ghost? | Part 6: `forget_worker` on a lost worker (else its prefixes are ghosts: the ledger would call an empty cache warm) and ledger LRU; both counted in `orch_hop_evictions_total{cause}`. SGLang's own radix-cache eviction is inside the engine and not visible to the ledger. |
 | Engine scheduler vs my admit/place/queue? | Part 2, "Two boxes"; Part 5 |
 | What limited concurrency? | `max_running_requests=8` (and before that the gateway dispatch cap 2), not KV: Part 1 |
-| Four production alerts | **GAP**: proposed in [Open work](#open-work) |
+| Four production alerts | `monitoring/alerts.yaml`, loaded by both Prometheus configs: **KvCachePressure** (`sglang:full_token_usage > 0.85` for 2 m: just under the 0.90 admission limit, so `kv_pressure` sheds or engine retractions are next), **TtftSloBreach** (engine p99 TTFT > 1 s for 5 m per worker; warm TTFT is 18–35 ms, so 1 s means queueing), **HighShedRate** (> 5 % of chat requests shed, per reason, for 5 m: names *which* decision is refusing work), **WorkerDown** (`up{job="sglang"} == 0` for 1 m: capacity halved). Unit-tested with `promtool test rules monitoring/tests/alerts_test.yaml`. |
 | If I scale, which pool? | Colocated replicas, so there is one pool, and on our mix the pressure is **decode slots** (97 % prefix hits make uncached prefill small). The first step is raising `--max-running-requests` while KV is at ~1 % and TPOT holds; after that, more GPU compute. Not "add a replica of the same size on the same GPU": that splits the same SMs and duplicates the prefix KV. |
 | 10× traffic; three wrong knobs | 10×: tenant windows and interactive priority first; overflow for 503 only; raise engine concurrency against a TPOT SLO; a second physical GPU for compute. Wrong knobs: (1) raise `queue_max_size`/`queue_timeout_s` (hides overload as TTFT); (2) raise `kv_usage_limit` toward 1.0 (turns sheds into engine retractions); (3) add more HAMi replicas on the same GPU (same compute, less KV each, more hops). |
 
@@ -326,11 +328,7 @@ Can be done without a GPU (code and tests), then proven on the GPU:
 4. ~~Export `orch_replica_queue_depth{worker}` and an evict counter~~: done in
    code (Part 5, Part 6); needs a Grafana panel and a GPU scrape.
 5. ~~Ramp for a returning worker~~: done in code (Part 5); needs the kill-worker run on the GPU.
-6. **Four alerts** (Prometheus rules), proposed:
-   - `sglang:full_token_usage > 0.85` for 2 m: KV pressure; sheds are imminent.
-   - p99 TTFT above the SLO for 5 m (warm replicas).
-   - `rate(orch_shed_total[5m]) / rate(orch_requests_total[5m]) > 0.05`, by reason.
-   - A worker unready or `up == 0` for 1 m (capacity halved; the other is at risk).
+6. ~~Four alerts~~ and Grafana panels for queue depth, hops/evictions and overflow: done (`monitoring/alerts.yaml`, `engine.json`).
 7. **Name the overflow model** (e.g. the same Qwen3-8B on a hosted provider, so
    the tool parser and prompts behave identically; interactive only, 503/529 only).
 8. **Notebook** (`notebook/`) for Part 5 from a live Prometheus scrape.

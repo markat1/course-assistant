@@ -63,6 +63,30 @@
         {"refId": "A", "expr": "sglang:cache_hit_rate", "legendFormat": "hit rate {{worker}}"},
         {"refId": "B", "expr": "sglang:num_retracted_reqs", "legendFormat": "retracted {{worker}}"}
       ]
+    },
+    {
+      "id": 9, "type": "timeseries", "title": "Gateway queue depth and in-flight per worker",
+      "gridPos": {"x": 0, "y": 32, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"refId": "A", "expr": "orch_replica_queue_depth", "legendFormat": "queued {{worker}}"},
+        {"refId": "B", "expr": "orch_replica_in_flight", "legendFormat": "in flight {{worker}}"}
+      ]
+    },
+    {
+      "id": 10, "type": "timeseries", "title": "KV hops and hop-ledger evictions (per second)",
+      "gridPos": {"x": 12, "y": 32, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"refId": "A", "expr": "sum by (src, dst) (rate(orch_hop_total[1m]))", "legendFormat": "hop {{src}} → {{dst}}"},
+        {"refId": "B", "expr": "sum by (cause) (rate(orch_hop_evictions_total[1m]))", "legendFormat": "evicted {{cause}}"}
+      ]
+    },
+    {
+      "id": 11, "type": "timeseries", "title": "Stay or leave decisions (per second)",
+      "gridPos": {"x": 0, "y": 40, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sum by (decision, code) (rate(orch_overflow_total[1m]))", "legendFormat": "{{decision}} {{code}}"}]
     }
   ]
 }

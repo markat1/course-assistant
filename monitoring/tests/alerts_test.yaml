@@ -1,0 +1,108 @@
+# promtool unit tests for monitoring/alerts.yaml. Run from the repository root:
+#   docker run --rm -v "$PWD/monitoring:/monitoring" --entrypoint promtool \
+#     prom/prometheus:v3.4.1 test rules /monitoring/tests/alerts_test.yaml
+rule_files:
+  - ../alerts.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # 1. KV pressure: above 85 % for 2 minutes on one worker.
+  - interval: 1m
+    input_series:
+      - series: 'sglang:full_token_usage{job="sglang",worker="worker-a"}'
+        values: '0.50 0.90 0.90 0.90 0.90'
+      - series: 'sglang:full_token_usage{job="sglang",worker="worker-b"}'
+        values: '0.10 0.10 0.10 0.10 0.10'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: KvCachePressure
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: KvCachePressure
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: sglang
+              worker: worker-a
+            exp_annotations:
+              summary: "KV cache above 85 % on worker-a"
+
+  # 2. TTFT SLO: engine p99 above 1 s for 5 minutes. Worker-a's first tokens
+  # land between 1 and 2 s; worker-b's stay under 0.5 s.
+  - interval: 1m
+    input_series:
+      - series: 'sglang:time_to_first_token_seconds_bucket{job="sglang",worker="worker-a",le="0.5"}'
+        values: '0x15'
+      - series: 'sglang:time_to_first_token_seconds_bucket{job="sglang",worker="worker-a",le="1"}'
+        values: '0x15'
+      - series: 'sglang:time_to_first_token_seconds_bucket{job="sglang",worker="worker-a",le="2"}'
+        values: '0+10x15'
+      - series: 'sglang:time_to_first_token_seconds_bucket{job="sglang",worker="worker-a",le="+Inf"}'
+        values: '0+10x15'
+      - series: 'sglang:time_to_first_token_seconds_bucket{job="sglang",worker="worker-b",le="0.5"}'
+        values: '0+10x15'
+      - series: 'sglang:time_to_first_token_seconds_bucket{job="sglang",worker="worker-b",le="1"}'
+        values: '0+10x15'
+      - series: 'sglang:time_to_first_token_seconds_bucket{job="sglang",worker="worker-b",le="2"}'
+        values: '0+10x15'
+      - series: 'sglang:time_to_first_token_seconds_bucket{job="sglang",worker="worker-b",le="+Inf"}'
+        values: '0+10x15'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: TtftSloBreach
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: TtftSloBreach
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              worker: worker-a
+            exp_annotations:
+              summary: "p99 time to first token above 1 s on worker-a"
+
+  # 3. Shed rate: more than 5 % of chat requests shed, per reason, for 5 minutes.
+  # 100 requests/min; kv_pressure sheds 10/min (10 %), tenant_tokens 2/min (2 %).
+  - interval: 1m
+    input_series:
+      - series: 'orch_requests_total{job="gateway"}'
+        values: '0+100x15'
+      - series: 'orch_shed_total{job="gateway",reason="kv_pressure",code="503"}'
+        values: '0+10x15'
+      - series: 'orch_shed_total{job="gateway",reason="tenant_tokens",code="429"}'
+        values: '0+2x15'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: HighShedRate
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: HighShedRate
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              reason: kv_pressure
+            exp_annotations:
+              summary: "More than 5 % of chat requests shed as kv_pressure"
+
+  # 4. Worker down: Prometheus cannot scrape an engine for 1 minute.
+  - interval: 30s
+    input_series:
+      - series: 'up{job="sglang",worker="worker-a"}'
+        values: '1 1 0 0 0 0'
+      - series: 'up{job="sglang",worker="worker-b"}'
+        values: '1 1 1 1 1 1'
+      - series: 'up{job="gateway"}'
+        values: '0 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: WorkerDown
+        exp_alerts: []
+      - eval_time: 2m30s
+        alertname: WorkerDown
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              job: sglang
+              worker: worker-a
+            exp_annotations:
+              summary: "Engine worker-a is not scraped; capacity is halved"
