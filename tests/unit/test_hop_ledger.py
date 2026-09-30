@@ -41,3 +41,21 @@ def test_forgetting_a_worker_prevents_ghost_hops_from_its_lost_cache():
     assert ledger.forget_worker("worker-a") == 1
     assert ledger.record("prefix-1", "worker-b", tokens=10) is None
     assert ledger.record("prefix-2", "worker-a", tokens=10) is not None
+
+
+def test_ledger_counts_prefixes_evicted_because_it_is_full():
+    ledger = HopLedger(max_prefixes=2)
+    for prefix in ("prefix-1", "prefix-2", "prefix-3", "prefix-4"):
+        ledger.record(prefix, "worker-a", tokens=10)
+
+    assert ledger.evictions == 2
+
+
+def test_placing_a_known_prefix_again_is_not_an_eviction():
+    ledger = HopLedger(max_prefixes=2)
+    ledger.record("prefix-1", "worker-a", tokens=10)
+    ledger.record("prefix-2", "worker-a", tokens=10)
+
+    ledger.record("prefix-1", "worker-b", tokens=10)
+
+    assert ledger.evictions == 0

@@ -154,8 +154,23 @@ them. 503/529 may leave. Overflow is disabled, so a leave is counted as
 Retry-After. Evidence: 252 capacity 503s → 252 `leave_disabled`
 (`metrics/guard-overflow-hops-2026-09-30.txt`).
 
-**GAP: tenant admission (`tenant_tokens`)**. There is no per-tenant token window
-yet, so one tenant can fill both queues.
+**Tenant window (`tenant_tokens`):** `gateway/policies/tenant_window.py`, called
+in `gateway/main.py` after the guard and before `admit`. Each tenant (`X-Tenant`
+header, default `default`) may spend `tenant_max_tokens` (200,000) per sliding
+`tenant_window_s` (60 s). A request costs its estimated prompt tokens plus
+`max_tokens` (or `max_output_tokens` if missing). Over budget → **429**
+`tenant_tokens` with Retry-After (seconds until enough old tokens leave the
+window), counted in `orch_shed_total{reason="tenant_tokens",code="429"}` and as
+`stay`: a 429 never overflows. A rejected request does not use the budget; a
+guard rejection does not reach the window. Tests: `tests/unit/test_tenant_window.py`,
+`tests/integration/test_tenant_admission.py`.
+
+The app sends `X-Tenant` from `APP_TENANT` (default `course-assistant`) on every
+agent step (`app/lifespan.py`, `default_headers`). In `experiments/locustfile.py`
+each interactive and agent user is its own `student-N` tenant (~20k tokens/min),
+while all batch users share `revision-batch` (~600k tokens/min offered), so the
+batch tenant is expected to hit `tenant_tokens` while students pass. **GAP**: not
+yet run on the GPU.
 
 **GAP: `should_shed(req, snap)` signature.** Admission is split between `admit`
 (workers) and the queue (`queue_full`, `timeout_queue`). It could be presented as
@@ -200,8 +215,9 @@ admit -> place -> gateway queue (per worker, FIFO, 16) -> dispatch (8 per worker
 |---|---|
 | Who sits in my queue vs the engine's? | Gateway queue: requests admitted but not dispatched (`gateway_queue_depth`). Engine waiting: dispatched but not yet running (`sglang:num_queue_reqs`). Because the dispatch cap (8) equals `--max-running-requests` (8), the engine queue stays ~0 and the backlog is visible in the gateway, where it can still be shed. |
 | Waiting / running / retracted? | `sglang:num_queue_reqs`, `sglang:num_running_reqs`, `sglang:num_retracted_reqs`, all on the "Engine and Queues" dashboard. |
-| Queue depth per pod? | **GAP**: `gateway_queue_depth` is used for routing but is not exported as a Prometheus gauge (`orch_replica_queue_depth{worker}`). |
-| 32k RAG retrieve vs short agent decode? | A 32k prompt never gets in: guard rejects it (`prompt_too_long`, context 8192). Inside 8k the gateway is FIFO per worker (**GAP**: no interactive priority). The engine then interleaves: `--chunked-prefill-size=2048` splits a long prefill so running decodes keep stepping. |
+| Queue depth per pod? | **GAP (in progress)**: `gateway_queue_depth` is used for routing but is not yet exported as `orch_replica_queue_depth{worker}`. |
+| 32k RAG retrieve vs short agent decode? | A 32k prompt never gets in: guard rejects it (`prompt_too_long`, context 8192). Inside 8k, **we** decide the order in our queue: interactive before batch (below). Once dispatched, **the engine** decides: `--chunked-prefill-size=2048` splits a long prefill so running decodes keep stepping. |
+| Interactive vs batch in my queue? | Each worker queue is an `asyncio.PriorityQueue` (`gateway/lifespan.py:create_queues`). `X-Request-Class: interactive\|batch` (default `interactive`; unknown → 400 `bad_request_class` at the guard) maps to a priority in `gateway/policies/priority.py`; `QueuedRequest` orders by (priority, arrival) so a class stays FIFO (`gateway/models/queued_request.py`). Batch can starve while interactive keeps arriving and then expires as `timeout_queue` (504): a deliberate "what we do not run". This orders only our queue; it is not the engine scheduler. Tests: `tests/unit/test_request_priority.py`, `tests/integration/test_request_class.py`. |
 | PagedAttention vs radix cache: which saved memory on the shared-prefix mix? | The radix cache. SGLang's token pool avoids fragmentation, but the savings on our mix come from reuse: ~97 % cache hit in Grafana, and a warm request recomputes 15–17 tokens instead of ~1,670 (`metrics/warmup-first-token-2026-09-29.txt`, `#cached-token: 1656`). |
 | Chunked prefill / batching flags | `--chunked-prefill-size=2048` (limits prefill per step, protects decode TPOT); `--max-running-requests=8` (decode CUDA graphs captured for bs 1, 2, 4, 8); `max_prefill_tokens=16384` (default). |
 | KV full after admit? | The gateway admits only below 90 % KV; after that the engine retracts (`num_retracted_reqs`). Not reached in any run (KV ≤ 1 %). The gateway does not fix OOM; it only avoids adding work above the limit. |
@@ -273,8 +289,8 @@ Screenshots: `plots/grafana-2026-09-29/`.
 | What dies at guard / admit / place / queue? | Guard: `bad_max_tokens`, `prompt_too_long` (400). Admit: `kv_pressure`, `no_eligible_workers` (503). Place: `no_eligible_workers` (503). Queue: `queue_full` (503), `timeout_queue` (504). `orch_shed_total`, `orch_guard_rejected_total` |
 | Where do I prevent work that will time out? | Queue deadline in `gateway/execution/waiting.py` and `dispatch.py`: an expired request is never dispatched (504 `timeout_queue`). Seen as 24 × 504 at dispatch cap 2 and 0 after the cap fix (`metrics/load-gateway-2026-09-29.txt`) |
 | Where do I protect KV? | Admission `kv_usage_limit` 0.90 on fresh metrics; dispatch cap = `max_running_requests`; guard caps prompt + output ≤ 8192 |
-| Where do I prioritize interactive traffic? | **GAP**. Measured need: interactive p99 6.0 s vs batch 4.4 s, spread +1.6 s (`metrics/locust-class7-mix-2026-09-29.txt`) |
-| Where do I stop one tenant owning the GPU? | **GAP** (tenant token window) |
+| Where do I prioritize interactive traffic? | Gateway priority queue per worker (Part 5). Before, with FIFO: interactive p99 6.0 s vs batch 4.4 s, spread +1.6 s (`metrics/locust-class7-mix-2026-09-29.txt`). **GAP**: re-run the labelled Locust mix on the GPU and compare the spread. |
+| Where do I stop one tenant owning the GPU? | `gateway/policies/tenant_window.py` (Part 3), 429 `tenant_tokens`. **GAP**: GPU evidence. |
 | Where do I hop; what is not copied? | Part 6 |
 | Where do I evict; what becomes a ghost? | Part 6 (`forget_worker`; ledger LRU). **GAP**: evict count |
 | Engine scheduler vs my admit/place/queue? | Part 2, "Two boxes"; Part 5 |
@@ -287,8 +303,9 @@ Screenshots: `plots/grafana-2026-09-29/`.
 
 Can be done without a GPU (code and tests), then proven on the GPU:
 
-1. **Tenant token window** (`tenant_tokens` shed). Part 3.
-2. **Interactive before batch** in the gateway queue, measured as p99 spread. Part 5, Part 8.
+1. ~~Tenant token window~~: done in code (Part 3); needs GPU evidence.
+2. ~~Interactive before batch~~: done in code, app and Locust traffic labelled
+   (Part 5); needs GPU evidence (p99 spread).
 3. **`prefix_then_load` placement** and a ledger that remembers the set of
    workers per prefix; hops are counted only onto a cold worker. Part 4, Part 6.
 4. **Export `orch_replica_queue_depth{worker}`** and an evict counter. Part 5, Part 6.
@@ -303,5 +320,6 @@ Can be done without a GPU (code and tests), then proven on the GPU:
 8. **Notebook** (`notebook/`) for Part 5 from a live Prometheus scrape.
 9. GPU cost/availability reasoning in Part 2.
 
-Needs the GPU: live evidence for items 1–5, capacity at `max_running_requests`
+Needs the GPU: live evidence for items 1–5 (tenant sheds on `revision-batch`,
+p99 spread with priority), capacity at `max_running_requests`
 > 8, a client-abort proof and the notebook run against live Prometheus.

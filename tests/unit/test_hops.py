@@ -48,3 +48,30 @@ def test_forgotten_worker_does_not_produce_a_hop(monkeypatch):
     hops.forget_worker("worker-a")
 
     assert hops.record_placement(payload, "worker-b") is None
+
+
+def eviction_count(cause: str) -> float:
+    value = GATEWAY_REGISTRY.get_sample_value("orch_hop_evictions_total", {"cause": cause})
+    return value or 0.0
+
+
+def test_full_ledger_eviction_is_counted_as_capacity(monkeypatch):
+    monkeypatch.setattr(hops, "HOP_LEDGER", HopLedger(max_prefixes=1))
+    before = eviction_count("capacity")
+
+    hops.record_placement(request("You are the Course Tutor.", "What is prefill?"), "worker-a")
+    hops.record_placement(request("You are the Course Router.", "What is prefill?"), "worker-a")
+
+    assert eviction_count("capacity") == before + 1
+
+
+def test_prefixes_of_a_lost_worker_are_counted_as_worker_lost(monkeypatch):
+    monkeypatch.setattr(hops, "HOP_LEDGER", HopLedger(max_prefixes=8))
+    hops.record_placement(request("You are the Course Tutor.", "What is prefill?"), "worker-a")
+    hops.record_placement(request("You are the Course Router.", "What is prefill?"), "worker-a")
+    hops.record_placement(request("Summarise the document.", "Summarise it."), "worker-b")
+    before = eviction_count("worker_lost")
+
+    hops.forget_worker("worker-a")
+
+    assert eviction_count("worker_lost") == before + 2

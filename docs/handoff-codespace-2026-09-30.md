@@ -14,6 +14,17 @@ local Claude Code session history was not available there, so this file and
 - Every missing piece is marked **GAP** in `DESIGN.md` and collected under
   "Open work" at the end.
 
+- Tenant token window: `gateway/policies/tenant_window.py`, wired in
+  `gateway/main.py` after the guard (429 `tenant_tokens`, stays local).
+  Settings `GATEWAY_TENANT_MAX_TOKENS` (200,000) / `GATEWAY_TENANT_WINDOW_S` (60).
+- Interactive before batch: per-worker `asyncio.PriorityQueue`,
+  `X-Request-Class` header, `gateway/policies/priority.py`.
+- The app sends `X-Request-Class: interactive` and `X-Tenant` (`APP_TENANT`) on
+  every agent step; Locust labels interactive/agent users as `student-N` and
+  batch users as one tenant `revision-batch`.
+- Working agreement: Claude writes the tests, Mark writes the production code.
+  No Claude co-author lines on commits.
+
 ## Needs checking by Mark
 
 - Part 2 GPU row: why an H100 and not a cheaper card (cost/availability).
@@ -25,7 +36,9 @@ local Claude Code session history was not available there, so this file and
 
 ## Next (no GPU needed)
 
-In the order of "Open work" in `DESIGN.md`: tenant token window, interactive
-priority, `prefix_then_load` + per-prefix worker set, queue-depth gauge and
-evict counter, ramp for a returning worker, four Prometheus alert rules,
-notebook skeleton.
+In progress: `orch_replica_queue_depth{worker}` / `orch_replica_in_flight{worker}`
+gauges and `orch_hop_evictions_total{cause}` (tests written:
+`tests/integration/test_queue_depth_metrics.py`, `tests/unit/test_hop_ledger.py`,
+`tests/unit/test_hops.py`). Then: `prefix_then_load` + per-prefix worker set,
+ramp for a returning worker, four Prometheus alert rules, notebook skeleton.
+On the next GPU session, re-run the labelled Locust mix (tenant sheds, p99 spread).
