@@ -105,13 +105,13 @@ reached ~1,000 generated tok/s at 8 concurrent requests
 
 | Decision | Choice | Why |
 |---|---|---|
-| GPU | H100 80GB SXM5 (Lambda, hourly) | Room for two replicas of an 8B BF16 model, each with a KV pool above max_len × 8. A 24 GB card fits one replica with ~4 GB KV. **GAP**: add cost/availability reasoning. |
+| GPU | H100 80GB SXM5 (Lambda, $4.29/h, rented per session and terminated between sessions) | The cheapest single GPU that holds **two** Qwen3-8B BF16 replicas (the brief requires at least two workers) with a useful KV pool each: 2 x 38,000 MiB HAMi slices give 115,299 KV tokens per worker (~14 sequences at 8,192). Rejected (Lambda list, 29-30 Sep 2026): A10 24 GB ($1.29/h) fits one replica with ~4-5 GB KV (~30k tokens), so two workers would need two machines or a smaller model; A100 40 GB ($1.99/h) cannot hold two 15.3 GiB replicas plus KV; A100 80 GB only as 8x ($22.32/h); GH200 ($2.29/h) is ARM64 while our pinned SGLang image is amd64. H100 PCIe ($3.29/h) was the first choice but unavailable on 29 Sep. Session cost: ~$4.29 per hour of experiments. |
 | Model | Qwen3-8B BF16, thinking disabled | Reliable structured tool calls with SGLang's `qwen25` parser (`metrics/h100-sxm5-hami-workers-2026-09-29.txt` §12); GQA keeps KV at 144 KiB/token. |
 | Engine | SGLang v0.5.20 (pinned digest) | Radix prefix cache for the shared agent prefix; Prometheus `/metrics`. |
 | Topology | 2 colocated replicas (prefill + decode on each), HAMi memory slices on one GPU | The workload is a short, highly shared prefix (~97 % cache hit) with multi-step decode. A prefill/decode split would move KV for little gain. HAMi enforces the memory split inside the pod (`metrics/h100-sxm5-hami-workers-2026-09-29.txt` §4). |
 | Concurrency | `--max-running-requests=8`, `--context-length=8192`, `--chunked-prefill-size=2048` | See Part 5. |
 | Hop backend | `recompute`, named and counted by the gateway; no Mooncake | Same GPU, colocated replicas: moving KV would need a transfer engine for a prefix that recomputes in ~54–73 ms cold. See Part 6. |
-| Overflow | **Disabled**; 503/529 are counted as `leave_disabled` | See Part 3. **GAP**: name the overflow model. |
+| Overflow | **Qwen3-8B BF16 on the same pinned SGLang image, on one 24 GB GPU we own** (demo: the local RTX 4090 over a reverse SSH tunnel; production: a 24 GB instance in the same region). Interactive only, 503/529 only. Currently switched off: a leave is counted as `leave_disabled` | Same weights, template and `qwen25` tool parser, so Router/Tutor tool calls behave identically, and we keep the KV, the warmup and the metrics. First limiter: the KV pool on 24 GB (~4-5 GB after weights). See Part 3. |
 | Orchestration | k3s StatefulSet `sglang` (2 replicas) + Compose for gateway, app, UI, Prometheus, Grafana | `cluster/`, `compose.*.yaml`, `docs/kubernetes-runbook.md` |
 
 **Two boxes:**
@@ -154,6 +154,42 @@ them. 503/529 may leave. Overflow is disabled, so a leave is counted as
 Retry-After. Evidence: 252 capacity 503s → 252 `leave_disabled`
 (`metrics/guard-overflow-hops-2026-09-30.txt`).
 
+**Overflow recipient (decision).** Who receives a 503/529: **Qwen3-8B BF16 on the
+same pinned SGLang v0.5.20 image and flags, on one 24 GB GPU that we own**, as a
+third worker outside the H100 cluster. Only interactive requests (`X-Request-Class:
+interactive`) and only 503/529 may leave; 429 (`tenant_tokens`), 500 and slice OOM
+never leave; batch is shed with Retry-After instead.
+
+- *Why this model:* it is the same model, chat template and `qwen25` tool-call
+  parser as the cluster, so the Router's handoff and the Tutor's `lookup_course`
+  calls work unchanged and answers do not change character under load. We own the
+  engine, so the gateway's warmup (five requests on the shared prefix), readiness
+  and `/metrics` apply to it exactly as to the cluster workers.
+- *Where it runs:* for the demo, the local RTX 4090 (24 GB), reached from the Lambda
+  gateway through a reverse SSH tunnel from the laptop; in production, a 24 GB
+  instance (e.g. an A10) in the same region, which removes the home network.
+- *Its limiter (hits first):* the KV pool. 24 GB minus ~15.3 GiB of weights and
+  runtime leaves roughly 4-5 GiB for KV, i.e. ~30,000 tokens at 144 KiB/token:
+  ~3-4 sequences at 8,192 tokens or ~15 agent turns at ~2,000 tokens. The engine
+  runs with `--max-running-requests=4` and the gateway caps overflow at 4 requests
+  in flight, so the overflow cannot become a second queue. The exact pool is read
+  from SGLang's `max_total_num_tokens` at startup. Second limiter: network - the
+  reverse tunnel from the US to Denmark adds ~100 ms or more to TTFT (vs 18-35 ms
+  in the cluster), acceptable for a request that would otherwise get a 503.
+- *Alternatives rejected (checked 30 September 2026):* Qwen3-8B on OpenRouter has
+  one provider and is deprecated on 9 October 2026; Qwen3-8B on Alibaba Cloud Model
+  Studio supports function calling only in the Beijing region, which would break
+  the agent's tool calls; Qwen3-32B on Groq was shut down on 17 July 2026; Qwen3-8B
+  on Fireworks is offered only as a dedicated GPU deployment (~$8/h), i.e. a second
+  cluster rather than overflow. The best hosted alternative is **Qwen3-32B on
+  DeepInfra** (same Qwen3 family and template, function calling, 40,960 context,
+  ~$0.10/$0.28 per 1M tokens, 200 concurrent requests per model); it was not chosen
+  because we would own neither its KV, its warmup nor its metrics, data would leave
+  the cluster, and a larger model would answer differently under load.
+- *Status:* decided and documented; the gateway still counts leaves as
+  `leave_disabled`. Sending them to the overflow worker (a URL setting plus the
+  in-flight cap of 4) and a live overflow run are not implemented. **GAP**.
+
 **Tenant window (`tenant_tokens`):** `gateway/policies/tenant_window.py`, called
 in `gateway/main.py` after the guard and before `admit`. Each tenant (`X-Tenant`
 header, default `default`) may spend `tenant_max_tokens` (200,000) per sliding
@@ -172,9 +208,25 @@ while all batch users share `revision-batch` (~600k tokens/min offered), so the
 batch tenant is expected to hit `tenant_tokens` while students pass. **GAP**: not
 yet run on the GPU.
 
-**GAP: `should_shed(req, snap)` signature.** Admission is split between `admit`
-(workers) and the queue (`queue_full`, `timeout_queue`). It could be presented as
-one function returning `(shed, code, reason, retry_after)`.
+**`should_shed(req, snap) -> (shed, code, reason, retry_after_seconds)`.** The brief's
+single function is implemented as an ordered pipeline in `gateway/main.py:chat_completions`,
+where `snap` is the gateway's view of the workers (`WorkerState`: ready, metric age,
+engine running/waiting, KV usage, gateway queue and in-flight). The first stage that
+says "shed" decides the tuple; nothing later runs:
+
+| Order | Stage (file) | shed? | code | reason | Retry-After |
+|---|---|---|---|---|---|
+| 1 | Guard `inspect` (`policies/guard.py`) | request cannot be served | 400 | `bad_max_tokens`, `prompt_too_long` | none (client must change the request) |
+| 2 | Tenant window (`policies/tenant_window.py`) | tenant over its token budget | 429 | `tenant_tokens` | seconds until enough budget frees up |
+| 3 | Admission `admit` (`policies/admission.py`) | no ready worker with fresh metrics / all above the KV limit | 503 | `no_eligible_workers`, `kv_pressure` | `capacity_retry_after_s` (7) |
+| 4 | Enqueue on the placed worker (`execution/queueing.py`) | worker queue full | 503 | `queue_full` | 7 |
+| 5 | Queue deadline (`execution/waiting.py`) | waited longer than `queue_timeout_s` | 504 | `timeout_queue` | none |
+
+Stages 1-3 decide before placement from the request and the snapshot; 4-5 depend on
+the chosen worker's queue. Every 503/429 is also classified stay-or-leave. Known
+limit: `timeout_queue` is detected after the wait, not predicted before enqueue; a
+predictive check (queue depth x recent service time > deadline -> 503 before
+enqueue) is the next step.
 
 ## Part 4. Place
 
@@ -334,8 +386,8 @@ Can be done without a GPU (code and tests), then proven on the GPU:
    code (Part 5, Part 6); needs a Grafana panel and a GPU scrape.
 5. ~~Ramp for a returning worker~~: done in code (Part 5); needs the kill-worker run on the GPU.
 6. ~~Four alerts~~ and Grafana panels for queue depth, hops/evictions and overflow: done (`monitoring/alerts.yaml`, `engine.json`).
-7. **Name the overflow model** (e.g. the same Qwen3-8B on a hosted provider, so
-   the tool parser and prompts behave identically; interactive only, 503/529 only).
+7. ~~Name the overflow model~~: decided (Part 3, "Overflow recipient"): Qwen3-8B on
+   one owned 24 GB GPU; forwarding leaves to it is not implemented.
 8. ~~Notebook~~: written (`notebook/part5_queue.ipynb`); run it with outputs on the GPU.
 9. GPU cost/availability reasoning in Part 2.
 
