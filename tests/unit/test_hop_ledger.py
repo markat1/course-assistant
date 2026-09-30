@@ -59,3 +59,46 @@ def test_placing_a_known_prefix_again_is_not_an_eviction():
     ledger.record("prefix-1", "worker-b", tokens=10)
 
     assert ledger.evictions == 0
+
+
+def test_a_prefix_placed_on_both_workers_is_held_by_both():
+    ledger = HopLedger(max_prefixes=8)
+    ledger.record("prefix-1", "worker-a", tokens=10)
+    ledger.record("prefix-1", "worker-b", tokens=10)
+
+    assert ledger.holders("prefix-1") == {"worker-a", "worker-b"}
+
+
+def test_unknown_prefix_has_no_holders():
+    ledger = HopLedger(max_prefixes=8)
+
+    assert ledger.holders("prefix-1") == set()
+
+
+def test_returning_to_a_worker_that_still_holds_the_prefix_is_not_a_hop():
+    ledger = HopLedger(max_prefixes=8)
+    ledger.record("prefix-1", "worker-a", tokens=10)
+    ledger.record("prefix-1", "worker-b", tokens=10)
+
+    assert ledger.record("prefix-1", "worker-a", tokens=10) is None
+
+
+def test_forgetting_one_holder_keeps_the_prefix_on_the_other():
+    ledger = HopLedger(max_prefixes=8)
+    ledger.record("prefix-1", "worker-a", tokens=10)
+    ledger.record("prefix-1", "worker-b", tokens=10)
+
+    assert ledger.forget_worker("worker-a") == 1
+
+    assert ledger.holders("prefix-1") == {"worker-b"}
+    hop = ledger.record("prefix-1", "worker-a", tokens=10)
+    assert hop is not None and (hop.src, hop.dst) == ("worker-b", "worker-a")
+
+
+def test_holders_are_a_copy_that_cannot_change_the_ledger():
+    ledger = HopLedger(max_prefixes=8)
+    ledger.record("prefix-1", "worker-a", tokens=10)
+
+    ledger.holders("prefix-1").add("worker-b")
+
+    assert ledger.holders("prefix-1") == {"worker-a"}

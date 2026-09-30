@@ -75,3 +75,11 @@ def test_prefixes_of_a_lost_worker_are_counted_as_worker_lost(monkeypatch):
     hops.forget_worker("worker-a")
 
     assert eviction_count("worker_lost") == before + 2
+
+
+def test_prefix_holders_are_looked_up_by_the_shared_prefix(monkeypatch):
+    monkeypatch.setattr(hops, "HOP_LEDGER", HopLedger(max_prefixes=8))
+    hops.record_placement(request("You are the Course Tutor.", "What is prefill?"), "worker-b")
+
+    assert hops.prefix_holders(request("You are the Course Tutor.", "What is decode?")) == {"worker-b"}
+    assert hops.prefix_holders(request("You are the Course Router.", "What is decode?")) == set()

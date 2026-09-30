@@ -178,8 +178,8 @@ one function returning `(shed, code, reason, retry_after)`.
 
 ## Part 4. Place
 
-`gateway/policies/routing.py:select_worker`: **least-loaded with queue depth as a
-scorer**.
+`gateway/policies/routing.py:select_worker`: **`prefix_then_load`**, i.e.
+least-loaded with queue depth as a scorer, then prefix affinity within a slack.
 
 ```
 load(worker) = gateway_queue_depth + gateway_in_flight + engine_waiting
@@ -199,10 +199,19 @@ load(worker) = gateway_queue_depth + gateway_in_flight + engine_waiting
 - **No bounce:** a request is placed once. If its queue is full it is shed
   (503), not re-placed.
 
-**GAP: prefix-aware placement (`prefix_then_load`).** Half of all placements
-move a shared prefix to the other worker (~200 hops each way in
-`metrics/guard-overflow-hops-2026-09-30.txt`). Prefill and decode use the same
-scorer because the replicas are colocated.
+- **Prefix affinity:** among eligible workers with queue room, a worker that
+  already holds the request's shared prefix (`gateway/execution/hops.py:prefix_holders`)
+  wins if its load is at most `lowest + prefix_load_slack` (default 4 = half the
+  dispatch cap of 8); otherwise the least-loaded worker wins and a hop is
+  recorded. Slack 0 would use the prefix only on ties; a high slack would pin a
+  popular prefix to one worker while the other idles. Why it is worth waiting a
+  little: a cold shared prefix costs 54–73 ms, a warm one 15–17 ms
+  (`metrics/warmup-first-token-2026-09-29.txt`). Before (random ties, no
+  affinity) half of all placements moved the prefix (~200 hops each way in
+  `metrics/guard-overflow-hops-2026-09-30.txt`). Tests: `tests/unit/test_routing.py`,
+  `tests/integration/test_prefix_placement.py`. **GAP**: re-measure hops and
+  p99 on the GPU.
+- Prefill and decode use the same scorer because the replicas are colocated.
 
 ## Part 5. Queue: what runs next, and what does not
 
@@ -215,7 +224,7 @@ admit -> place -> gateway queue (per worker, FIFO, 16) -> dispatch (8 per worker
 |---|---|
 | Who sits in my queue vs the engine's? | Gateway queue: requests admitted but not dispatched (`gateway_queue_depth`). Engine waiting: dispatched but not yet running (`sglang:num_queue_reqs`). Because the dispatch cap (8) equals `--max-running-requests` (8), the engine queue stays ~0 and the backlog is visible in the gateway, where it can still be shed. |
 | Waiting / running / retracted? | `sglang:num_queue_reqs`, `sglang:num_running_reqs`, `sglang:num_retracted_reqs`, all on the "Engine and Queues" dashboard. |
-| Queue depth per pod? | **GAP (in progress)**: `gateway_queue_depth` is used for routing but is not yet exported as `orch_replica_queue_depth{worker}`. |
+| Queue depth per pod? | `orch_replica_queue_depth{worker}` (waiting in our queue) and `orch_replica_in_flight{worker}` (dispatched, not finished), set from `WorkerState` on every `/metrics` scrape (`gateway/main.py:metrics`). Next to `sglang:num_queue_reqs` this shows who waits where. Tests: `tests/integration/test_queue_depth_metrics.py`. **GAP**: Grafana panel and GPU scrape under the labelled mix. |
 | 32k RAG retrieve vs short agent decode? | A 32k prompt never gets in: guard rejects it (`prompt_too_long`, context 8192). Inside 8k, **we** decide the order in our queue: interactive before batch (below). Once dispatched, **the engine** decides: `--chunked-prefill-size=2048` splits a long prefill so running decodes keep stepping. |
 | Interactive vs batch in my queue? | Each worker queue is an `asyncio.PriorityQueue` (`gateway/lifespan.py:create_queues`). `X-Request-Class: interactive\|batch` (default `interactive`; unknown → 400 `bad_request_class` at the guard) maps to a priority in `gateway/policies/priority.py`; `QueuedRequest` orders by (priority, arrival) so a class stays FIFO (`gateway/models/queued_request.py`). Batch can starve while interactive keeps arriving and then expires as `timeout_queue` (504): a deliberate "what we do not run". This orders only our queue; it is not the engine scheduler. Tests: `tests/unit/test_request_priority.py`, `tests/integration/test_request_class.py`. |
 | PagedAttention vs radix cache: which saved memory on the shared-prefix mix? | The radix cache. SGLang's token pool avoids fragmentation, but the savings on our mix come from reuse: ~97 % cache hit in Grafana, and a warm request recomputes 15–17 tokens instead of ~1,670 (`metrics/warmup-first-token-2026-09-29.txt`, `#cached-token: 1656`). |
@@ -237,10 +246,16 @@ admit -> place -> gateway queue (per worker, FIFO, 16) -> dispatch (8 per worker
 - **Ghosts:** when a worker fails or restarts, `forget_worker` drops its prefixes
   so the ledger does not believe a lost cache is still warm
   (`gateway/execution/dispatch.py`, `gateway/monitoring/polling.py`).
-- **Evict:** the ledger keeps 1,024 prefixes (LRU). **GAP**: no evict counter,
-  and the ledger remembers only the *last* worker per prefix, so hops onto a
-  worker that still holds the prefix are over-counted (431,331 tokens is an
-  upper bound, `metrics/guard-overflow-hops-2026-09-30.txt`).
+- **Evict:** the ledger keeps 1,024 prefixes (LRU). Every forgotten prefix is
+  counted in `orch_hop_evictions_total{cause}`: `capacity` when the ledger is
+  full (`HopLedger.evictions`), `worker_lost` when a worker's cache is gone
+  (`gateway/execution/hops.py`). Tests: `tests/unit/test_hop_ledger.py`,
+  `tests/unit/test_hops.py`. The ledger remembers the **set** of workers holding each prefix
+  (`HopLedger.holders`), so returning to a worker that still holds it is not a
+  hop. The earlier last-owner ledger over-counted (431,331 tokens was an upper
+  bound, `metrics/guard-overflow-hops-2026-09-30.txt`). SGLang may still evict
+  a prefix from its radix cache without telling us, so a counted non-hop can
+  in rare cases be a recompute.
 
 **Is it actually warm?** A replica is not ready when the weights are loaded.
 The gateway's `prepare_worker` (`gateway/monitoring/readiness.py`) checks
@@ -292,7 +307,7 @@ Screenshots: `plots/grafana-2026-09-29/`.
 | Where do I prioritize interactive traffic? | Gateway priority queue per worker (Part 5). Before, with FIFO: interactive p99 6.0 s vs batch 4.4 s, spread +1.6 s (`metrics/locust-class7-mix-2026-09-29.txt`). **GAP**: re-run the labelled Locust mix on the GPU and compare the spread. |
 | Where do I stop one tenant owning the GPU? | `gateway/policies/tenant_window.py` (Part 3), 429 `tenant_tokens`. **GAP**: GPU evidence. |
 | Where do I hop; what is not copied? | Part 6 |
-| Where do I evict; what becomes a ghost? | Part 6 (`forget_worker`; ledger LRU). **GAP**: evict count |
+| Where do I evict; what becomes a ghost? | Part 6: `forget_worker` on a lost worker (else its prefixes are ghosts: the ledger would call an empty cache warm) and ledger LRU; both counted in `orch_hop_evictions_total{cause}`. SGLang's own radix-cache eviction is inside the engine and not visible to the ledger. |
 | Engine scheduler vs my admit/place/queue? | Part 2, "Two boxes"; Part 5 |
 | What limited concurrency? | `max_running_requests=8` (and before that the gateway dispatch cap 2), not KV: Part 1 |
 | Four production alerts | **GAP**: proposed in [Open work](#open-work) |
@@ -306,9 +321,10 @@ Can be done without a GPU (code and tests), then proven on the GPU:
 1. ~~Tenant token window~~: done in code (Part 3); needs GPU evidence.
 2. ~~Interactive before batch~~: done in code, app and Locust traffic labelled
    (Part 5); needs GPU evidence (p99 spread).
-3. **`prefix_then_load` placement** and a ledger that remembers the set of
-   workers per prefix; hops are counted only onto a cold worker. Part 4, Part 6.
-4. **Export `orch_replica_queue_depth{worker}`** and an evict counter. Part 5, Part 6.
+3. ~~`prefix_then_load` placement + per-prefix worker set~~: done in code
+   (Part 4, Part 6); needs GPU evidence (hops and p99 before/after).
+4. ~~Export `orch_replica_queue_depth{worker}` and an evict counter~~: done in
+   code (Part 5, Part 6); needs a Grafana panel and a GPU scrape.
 5. **Ramp for a returning worker** (1→2→4→8 while p99 holds). Part 5.
 6. **Four alerts** (Prometheus rules), proposed:
    - `sglang:full_token_usage > 0.85` for 2 m: KV pressure; sheds are imminent.

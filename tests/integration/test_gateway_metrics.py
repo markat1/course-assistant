@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 
 from gateway.main import app
 from gateway.models.workers.worker_state import WorkerState
+from gateway.policies.hop_ledger import HopLedger
 from gateway.policies.tenant_window import TenantWindow
 
 
@@ -23,7 +24,7 @@ async def client(monkeypatch):
         SimpleNamespace(
             metrics_max_age_s=10.0, kv_usage_limit=0.9,
             queue_timeout_s=5, capacity_retry_after_s=7, queue_max_size=16,
-            context_length=8192, max_output_tokens=1024,
+            context_length=8192, max_output_tokens=1024, prefix_load_slack=4,
         ),
         raising=False,
     )
@@ -35,6 +36,8 @@ async def client(monkeypatch):
     monkeypatch.setattr(
         app.state, "tenant_window", TenantWindow(max_tokens=10**9, window_s=60.0), raising=False,
     )
+
+    monkeypatch.setattr("gateway.execution.hops.HOP_LEDGER", HopLedger(max_prefixes=64))
 
     # Isolate counter behavior here; test_chat_api covers real queue/dispatch execution.
     async def completed_chat(payload, worker, queue, *, timeout_s, capacity_retry_after_s, **options):

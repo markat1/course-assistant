@@ -38,7 +38,7 @@ def serving(monkeypatch):
         settings = SimpleNamespace(
             metrics_max_age_s=10, kv_usage_limit=0.9, queue_timeout_s=timeout_s,
             capacity_retry_after_s=7, queue_max_size=1,
-            context_length=8192, max_output_tokens=1024,
+            context_length=8192, max_output_tokens=1024, prefix_load_slack=4,
         )
         monkeypatch.setattr(app.state, "workers", {worker.id: worker}, raising=False)
         monkeypatch.setattr(app.state, "queues", {worker.id: queue}, raising=False)

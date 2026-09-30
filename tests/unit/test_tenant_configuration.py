@@ -40,3 +40,11 @@ def test_tenant_budget_is_read_from_the_gateway_environment(settings_values, mon
 def test_invalid_tenant_budget_fails_before_startup(settings_values, name, value):
     with pytest.raises(ValidationError):
         Settings(**settings_values, **{name: value})
+
+
+def test_prefix_load_slack_is_configurable_and_not_negative(settings_values, monkeypatch):
+    monkeypatch.setenv("GATEWAY_PREFIX_LOAD_SLACK", "6")
+    assert Settings(**settings_values).prefix_load_slack == 6
+
+    with pytest.raises(ValidationError):
+        Settings(**settings_values, prefix_load_slack=-1)

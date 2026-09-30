@@ -71,3 +71,77 @@ def test_engine_waiting_still_counts_as_load():
     selected = select_worker([backlog, clear], max_metrics_age_s=10, queue_max_size=16, choose=first)
 
     assert selected is clear
+
+
+def test_worker_holding_the_prefix_wins_a_tie():
+    a = ready_worker("worker-a", in_flight=2)
+    b = ready_worker("worker-b", in_flight=2)
+
+    selected = select_worker(
+        [a, b], max_metrics_age_s=10, queue_max_size=16,
+        holders={"worker-b"}, prefix_load_slack=4, choose=first,
+    )
+
+    assert selected is b
+
+
+def test_worker_holding_the_prefix_wins_within_the_load_slack():
+    holder = ready_worker("worker-a", in_flight=4)
+    idle = ready_worker("worker-b")
+
+    selected = select_worker(
+        [holder, idle], max_metrics_age_s=10, queue_max_size=16,
+        holders={"worker-a"}, prefix_load_slack=4, choose=first,
+    )
+
+    assert selected is holder
+
+
+def test_least_loaded_wins_when_the_holder_is_busier_than_the_slack():
+    holder = ready_worker("worker-a", in_flight=5)
+    idle = ready_worker("worker-b")
+
+    selected = select_worker(
+        [holder, idle], max_metrics_age_s=10, queue_max_size=16,
+        holders={"worker-a"}, prefix_load_slack=4, choose=first,
+    )
+
+    assert selected is idle
+
+
+def test_holder_with_a_full_queue_is_not_preferred():
+    holder = ready_worker("worker-a", queued=16)
+    other = ready_worker("worker-b", in_flight=8)
+
+    selected = select_worker(
+        [holder, other], max_metrics_age_s=10, queue_max_size=16,
+        holders={"worker-a"}, prefix_load_slack=100, choose=first,
+    )
+
+    assert selected is other
+
+
+def test_holder_that_is_not_ready_is_not_preferred():
+    holder = ready_worker("worker-a")
+    holder.ready = False
+    other = ready_worker("worker-b", in_flight=3)
+
+    selected = select_worker(
+        [holder, other], max_metrics_age_s=10, queue_max_size=16,
+        holders={"worker-a"}, prefix_load_slack=4, choose=first,
+    )
+
+    assert selected is other
+
+
+def test_among_several_holders_the_least_loaded_is_chosen():
+    a = ready_worker("worker-a", in_flight=3)
+    b = ready_worker("worker-b", in_flight=1)
+    c = ready_worker("worker-c")
+
+    selected = select_worker(
+        [a, b, c], max_metrics_age_s=10, queue_max_size=16,
+        holders={"worker-a", "worker-b"}, prefix_load_slack=4, choose=first,
+    )
+
+    assert selected is b
