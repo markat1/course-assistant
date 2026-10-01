@@ -26,7 +26,7 @@ slices, engine flags).
 | overflow gate (stay or leave, after the local result) | on every refusal and every non-200 engine answer | `api/chat.py:43` `record_overflow_decision`, `policies/overflow.py` |
 | should we accept it? (admit) | tenant window (429), then `admit()` (503) | `main.py:88-107` |
 | which worker? (place) | `select_worker`, `prefix_then_load` | `main.py:110`, `policies/routing.py` |
-| your queue (same pod: no hop; two ids: hop) | `record_placement` records a hop when the prefix moves worker; then the worker's priority queue | `main.py:127`, `execution/hops.py`, `execution/queueing.py` |
+| your queue (same pod: no hop; two ids: hop) | `record_placement` records a hop when the prefix moves worker; then the worker's priority queue | `main.py:134`, `execution/hops.py`, `execution/queueing.py` |
 | engine (prefill, decode, KV, waiting/running/preempt) | SGLang, unchanged, configured by flags | `cluster/workers/sglang.yaml` |
 | 429 / 500 / slice_oom stay; 503 / 529 may leave | `LEAVE_STATUSES = {503, 529}`, counted in `orch_overflow_total{decision,code}` | `policies/overflow.py` |
 
@@ -208,9 +208,12 @@ below `kv_usage_limit` (0.90):
 - `no_eligible_workers` (503 + Retry-After): no worker is ready or fresh.
 
 After placement, the per-worker queue can shed:
-- `queue_full` (503 + Retry-After): the chosen worker's queue (16) is full.
-- `timeout_queue` (504): the request waited longer than `queue_timeout_s` (5 s)
-  before dispatch.
+- `queue_full` (503 + Retry-After): the chosen worker's queue (16) is full, or a
+  batch request arrives when the queue already holds `batch_queue_max_size` (8):
+  the last slots are kept for interactive requests (`main.py:126`).
+- `timeout_queue` (504): the request waited longer than its class deadline before
+  dispatch: `queue_timeout_s` (5 s) for interactive, `batch_queue_timeout_s`
+  (30 s) for batch.
 
 All sheds are counted in `orch_shed_total{reason,code}`.
 
@@ -294,8 +297,8 @@ says "shed" decides the tuple; nothing later runs:
 | 1 | Guard `inspect` (`policies/guard.py`) | request cannot be served | 400 | `bad_max_tokens`, `prompt_too_long` | none (client must change the request) |
 | 2 | Tenant window (`policies/tenant_window.py`) | tenant over its token budget | 429 | `tenant_tokens` | seconds until enough budget frees up |
 | 3 | Admission `admit` (`policies/admission.py`) | no ready worker with fresh metrics / all above the KV limit | 503 | `no_eligible_workers`, `kv_pressure` | `capacity_retry_after_s` (7) |
-| 4 | Enqueue on the placed worker (`execution/queueing.py`) | worker queue full | 503 | `queue_full` | 7 |
-| 5 | Queue deadline (`execution/waiting.py`) | waited longer than `queue_timeout_s` | 504 | `timeout_queue` | none |
+| 4 | Enqueue on the placed worker (`main.py:126`, `execution/queueing.py`) | worker queue full, or batch when the queue holds 8 | 503 | `queue_full` | 7 |
+| 5 | Queue deadline (`execution/waiting.py`) | waited longer than the class deadline (interactive 5 s, batch 30 s) | 504 | `timeout_queue` | none |
 
 Stages 1-3 decide before placement from the request and the snapshot; 4-5 depend on
 the chosen worker's queue. Every 503/429 is also classified stay-or-leave. Known
@@ -514,7 +517,7 @@ admit -> place -> gateway queue (per worker, priority: interactive first, 16) ->
 | Waiting / running / retracted? | `sglang:num_queue_reqs`, `sglang:num_running_reqs`, `sglang:num_retracted_reqs`, all on the "Engine and Queues" dashboard. |
 | Queue depth per pod? | `orch_replica_queue_depth{worker}` (waiting in our queue) and `orch_replica_in_flight{worker}` (dispatched, not finished), set from `WorkerState` on every `/metrics` scrape (`gateway/main.py:metrics`). Next to `sglang:num_queue_reqs` this shows who waits where. Tests: `tests/integration/test_queue_depth_metrics.py`. Grafana panel "Gateway queue depth and in-flight per worker"; notebook plot `plots/part5-queue-depth-by-pod.png` over the labelled mix on the A100. |
 | 32k RAG retrieve vs short agent decode? | A 32k prompt never gets in: guard rejects it (`prompt_too_long`, context 8192). Inside 8k, **we** decide the order in our queue: interactive before batch (below). Once dispatched, **the engine** decides: `--chunked-prefill-size=2048` splits a long prefill so running decodes keep stepping. |
-| Interactive vs batch in my queue? | Each worker queue is an `asyncio.PriorityQueue` (`gateway/lifespan.py:create_queues`). `X-Request-Class: interactive\|batch` (default `interactive`; unknown → 400 `bad_request_class` at the guard) maps to a priority in `gateway/policies/priority.py`; `QueuedRequest` orders by (priority, arrival) so a class stays FIFO (`gateway/models/queued_request.py`). Batch can starve while interactive keeps arriving and then expires as `timeout_queue` (504): a deliberate "what we do not run". This orders only our queue; it is not the engine scheduler. Tests: `tests/unit/test_request_priority.py`, `tests/integration/test_request_class.py`. **Evidence (A100):** interactive and agent 0 failures; batch 102 x 504 (with the tenant window) and 72 of 99 x 504 (without). **Lesson:** one 5 s queue deadline for every class does not fit batch (Abi's Class 7 trace gives batch 30 s); a per-class deadline is the next change. |
+| Interactive vs batch in my queue? | Each worker queue is an `asyncio.PriorityQueue` (`gateway/lifespan.py:create_queues`). `X-Request-Class: interactive\|batch` (default `interactive`; unknown → 400 `bad_request_class` at the guard) maps to a priority in `gateway/policies/priority.py`; `QueuedRequest` orders by (priority, arrival) so a class stays FIFO (`gateway/models/queued_request.py`). Batch can starve while interactive keeps arriving and then expires as `timeout_queue` (504): a deliberate "what we do not run". This orders only our queue; it is not the engine scheduler. Tests: `tests/unit/test_request_priority.py`, `tests/integration/test_request_class.py`. **Evidence (A100):** interactive and agent 0 failures; batch 102 x 504 (with the tenant window) and 72 of 99 x 504 (without). **Lesson:** one 5 s queue deadline for every class does not fit batch (Abi's Class 7 trace gives batch 30 s); since 1 October batch has its own 30 s deadline and may only enter a queue that holds fewer than 8 requests (`gateway/main.py:126`, `tests/integration/test_batch_queue.py`); not yet re-measured on the GPU. |
 | PagedAttention vs radix cache: which saved memory on the shared-prefix mix? | The radix cache. SGLang's token pool avoids fragmentation, but the savings on our mix come from reuse: ~97 % cache hit in Grafana, and a warm request recomputes 15–17 tokens instead of ~1,670 (`metrics/warmup-first-token-2026-09-29.txt`, `#cached-token: 1656`). |
 | Chunked prefill / batching flags | `--chunked-prefill-size=2048` (limits prefill per step, protects decode TPOT); `--max-running-requests=8` (decode CUDA graphs captured for bs 1, 2, 4, 8); `max_prefill_tokens=16384` (default). |
 | KV full after admit? | The gateway admits only below 90 % KV; after that the engine retracts (`num_retracted_reqs`). Not reached in any run: peak KV 8.8 %, 0 retractions (A100 labelled mix, notebook). The gateway does not fix OOM; it only avoids adding work above the limit. |
@@ -651,8 +654,11 @@ outputs, GPU cost reasoning.
 
 Still open, in order of value:
 
-1. **Per-class queue deadline** (batch ~30 s, interactive 5 s): today batch ends
-   as 504 after waiting.
+1. **Per-class queue deadline, measured on the GPU.** Implemented and tested on
+   1 October (batch 30 s, interactive 5 s, batch refused with 503 `queue_full` when
+   the queue holds 8 of 16; `tests/integration/test_batch_queue.py`). Not yet run
+   on the GPU: the same labelled mix must show fewer batch 504s (102 before) with
+   interactive still at 0 failures.
 2. **Predictive `timeout_queue`**: refuse before enqueue when queue depth x recent
    service time exceeds the deadline (503) instead of 504 after the wait.
 3. **Overflow forwarding**: the recipient is decided (Qwen3-8B on an owned 24 GB

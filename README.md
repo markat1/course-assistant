@@ -49,7 +49,7 @@ Prometheus scrapes gateway + both engines -> Grafana dashboards + 4 alert rules
 |---|---|---|---|
 | 1 | What is the app; shared vs unique tokens? | Course agent; shared = system prompt + tool schema (~97 % prefix-cache hits), unique = question / documents | DESIGN Part 0 |
 | 2 | What dies at guard / admit / place / queue? | Guard 400 (`bad_max_tokens`, `prompt_too_long`); tenant 429; admit 503 (`no_eligible_workers`, `kv_pressure`); queue 503 `queue_full`, 504 `timeout_queue` | DESIGN Part 3 table |
-| 3 | Where do I prevent work that will time out? | Queue deadline before dispatch (5 s); lesson: batch needs its own, longer deadline | `gateway/execution/waiting.py`; 102 x 504 on batch |
+| 3 | Where do I prevent work that will time out? | Queue deadline before dispatch: interactive 5 s, batch 30 s with a cap of half the queue (the 102 x 504 were measured with one 5 s deadline; not yet re-run) | `gateway/execution/waiting.py`; 102 x 504 on batch |
 | 4 | Where do I protect KV? | Admission refuses above 0.90 KV on fresh metrics; dispatch cap = engine running cap | `gateway/policies/admission.py` |
 | 5 | Where do I prioritise interactive traffic? | Per-worker priority queue on `X-Request-Class` | `gateway/policies/priority.py`; interactive 0 failures |
 | 6 | Where do I stop one tenant owning the GPU? | Sliding token window per `X-Tenant`, 429 + Retry-After, never overflows | `gateway/policies/tenant_window.py`; 76 x 429 |

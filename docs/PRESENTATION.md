@@ -4,7 +4,8 @@ For each of the brief's 13 questions: which diagram to point at, where the code 
 which number proves it, and the term to use. Full answers are in
 [`DESIGN.md`](../DESIGN.md); this file is only the route through them.
 
-Line numbers are for the current `main`. They move when `gateway/main.py` changes.
+Line numbers are for `main` after the batch queue deadline (1 October). They move
+when `gateway/main.py` changes.
 
 ## The one sentence
 
@@ -30,7 +31,7 @@ proven with scrapes from the real cluster.
 |---|---|---|---|---|---|
 | 1 | What is the app; shared vs unique tokens? | `agent-turn`: the four boxes in APP, the green and blue notes | [`app/agents/router.py:4`](../app/agents/router.py#L4), [`app/agents/tutor.py:5`](../app/agents/tutor.py#L5), [`app/tools/course_lookup.py:8`](../app/tools/course_lookup.py#L8), headers in [`app/lifespan.py:24`](../app/lifespan.py#L24) | ~97 % prefix-cache hits | shared prefix, prefix cache |
 | 2 | What dies at guard / admit / place / queue? | `shipping-pipeline`: right column, steps 1-6 | [`gateway/main.py:60`](../gateway/main.py#L60) (the whole order); guard [`:66`](../gateway/main.py#L66), tenant [`:88`](../gateway/main.py#L88), admit [`:96`](../gateway/main.py#L96), place [`:110`](../gateway/main.py#L110) | 400 / 429 / 503 / 504 | shed, admission |
-| 3 | Where do I prevent work that will time out? | `shipping-pipeline`: step 6 | [`gateway/execution/waiting.py:8`](../gateway/execution/waiting.py#L8), [`gateway/execution/dispatch.py:31`](../gateway/execution/dispatch.py#L31) | 102 x 504 on batch | queue deadline |
+| 3 | Where do I prevent work that will time out? | `shipping-pipeline`: step 6 | [`gateway/execution/waiting.py:8`](../gateway/execution/waiting.py#L8), [`gateway/execution/dispatch.py:31`](../gateway/execution/dispatch.py#L31), deadline per class in [`gateway/main.py:140`](../gateway/main.py#L140) | 102 x 504 on batch (before the per-class deadline) | queue deadline |
 | 4 | Where do I protect KV? | `shipping-pipeline`: step 3; `capacity`: red box | [`gateway/policies/admission.py:6`](../gateway/policies/admission.py#L6), dispatch cap in [`gateway/execution/lifecycle.py:32`](../gateway/execution/lifecycle.py#L32) | admit below 0.90; KV peak 8.8 % | KV pressure, dispatch cap |
 | 5 | Where do I prioritise interactive traffic? | `architecture`: gateway step 5 | [`gateway/policies/priority.py:1`](../gateway/policies/priority.py#L1), [`gateway/models/queued_request.py:21`](../gateway/models/queued_request.py#L21), [`gateway/lifespan.py:54`](../gateway/lifespan.py#L54) | interactive 0 failures | priority queue, request class |
 | 6 | Where do I stop one tenant owning the GPU? | `shipping-pipeline`: step 2 | [`gateway/policies/tenant_window.py:27`](../gateway/policies/tenant_window.py#L27) | 76 x 429, all on `revision-batch` | tenant window, Retry-After |
@@ -60,8 +61,10 @@ proven with scrapes from the real cluster.
 
 ## Say these before anyone asks
 
-- Batch ends as 504 after 5 s (102 times). Fix designed, tests written: a 30 s
-  deadline for batch and a cap of half the queue.
+- Batch ended as 504 after 5 s (102 times). Fixed and tested, not yet measured on
+  the GPU: batch now waits up to 30 s, but is refused with 503 once the queue is
+  half full, so the last slots are always for interactive requests
+  ([`gateway/main.py:126`](../gateway/main.py#L126)).
 - Overflow is decided (Qwen3-8B on an owned 24 GB GPU) but not wired: 503 is
   counted as `leave_disabled`.
 - The tokenizer counter is new and proven without a GPU only (6/6 against the
