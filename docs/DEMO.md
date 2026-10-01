@@ -28,7 +28,7 @@ Prometheus scrapes gateway + both engines -> Grafana, 4 alert rules
 
 | Piece | Where | Why |
 |---|---|---|
-| GPU | Lambda H100 80GB SXM5 (or A100 80GB when no H100 is free) | Cheapest single GPU that holds two 8B BF16 replicas with a useful KV pool |
+| GPU | Lambda H100 80GB SXM5 (or A100 80GB when no H100 is free) | One 80 GB GPU holds two 8B BF16 replicas with a useful KV pool each |
 | Slicing | HAMi, 2 x 38,000 MiB (`cluster/workers/sglang.yaml`) | Memory split enforced inside CUDA (29.3 GiB visible for a 30,000 MiB pod) |
 | Engine | SGLang v0.5.20, `--max-running-requests=8`, `--context-length=8192`, `--mem-fraction-static=0.85` | Radix prefix cache for the shared agent prefix; 115,299 KV tokens per worker |
 | Gateway + app + monitoring | Docker Compose on the same host (`compose*.yaml`) | Gateway and engine are two separate boxes |
