@@ -5,8 +5,9 @@ from gateway.policies.admission import admit
 from gateway.policies.priority import request_priority
 from gateway.policies.routing import select_worker
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
-from gateway.api.chat import reject_before_dispatch, serve_queued_chat
-from gateway.policies.guard import estimate_prompt_tokens, inspect
+from gateway.api.chat import observe_engine_count, reject_before_dispatch, serve_queued_chat
+from gateway.policies.guard import inspect
+from gateway.policies.token_count import estimate_tokens
 from gateway.execution.hops import prefix_holders, record_placement
 
 from gateway.monitoring.metrics import (
@@ -60,24 +61,27 @@ async def chat_completions(chat_request: ChatRequest, request: Request):
     """Validate admission and select a worker for a chat completion"""
     settings = request.app.state.settings
     workers = request.app.state.workers
+    counter = getattr(request.app.state, "token_counter", estimate_tokens)
 
     guard = inspect(
         chat_request,
         context_length=settings.context_length,
         max_output_tokens=settings.max_output_tokens,
+        counter=counter,
     )
     if not guard.ok:
         GUARD_REJECTED_TOTAL.labels(reason=guard.reason).inc()
         raise HTTPException(status_code=guard.status, detail=guard.reason)
 
+    request_class = request.headers.get("x-request-class", "interactive")
     try:
-        priority= request_priority(request.headers.get("x-request-class", "interactive"))
+        priority= request_priority(request_class)
     except ValueError:
         GUARD_REJECTED_TOTAL.labels(reason="bad_request_class").inc()
         raise HTTPException(status_code=400, detail="bad_request_class")
 
     tenant = request.headers.get("x-tenant","default")
-    tokens = estimate_prompt_tokens(chat_request) + (
+    tokens = guard.prompt_tokens + (
         chat_request.max_tokens or settings.max_output_tokens
     )
 
@@ -120,9 +124,9 @@ async def chat_completions(chat_request: ChatRequest, request: Request):
         )
 
     PLACE_TOTAL.labels(worker=worker.id).inc()
-    record_placement(chat_request, worker.id)
+    record_placement(chat_request, worker.id, counter)
 
-    return await serve_queued_chat(
+    response = await serve_queued_chat(
         chat_request,
         worker,
         request.app.state.queues[worker.id],
@@ -130,3 +134,5 @@ async def chat_completions(chat_request: ChatRequest, request: Request):
         capacity_retry_after_s=settings.capacity_retry_after_s,
         priority=priority,
     )
+    observe_engine_count(response, guard.prompt_tokens, request_class)
+    return response

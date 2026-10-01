@@ -1,5 +1,5 @@
 from prometheus_client import CollectorRegistry, Counter
-from prometheus_client import CollectorRegistry, Counter, Gauge
+from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram
 
 GATEWAY_REGISTRY = CollectorRegistry()
 
@@ -47,7 +47,7 @@ HOP_TOTAL = Counter(
 
 HOP_TOKENS_TOTAL = Counter(
     "orch_hop_tokens_total",
-    "Estimated prefix tokens recomputed because of hops.",
+    "Prefix tokens recomputed because of hops, counted by the active token counter.",
     registry=GATEWAY_REGISTRY
 )
 
@@ -69,5 +69,20 @@ HOP_EVICTIONS_TOTAL = Counter(
     "orch_hop_evictions_total",
     "Prefixes the hop ledge forgot: capacity (ledger full) or worker_lost (cache gone)",
     labelnames=["cause"],
+    registry=GATEWAY_REGISTRY
+)
+
+TOKEN_COUNTER_INFO = Gauge(
+    "orch_token_counter_info",
+    "The token counter behind the guard, the tenant window and hop tokens.",
+    labelnames=["counter"],
+    registry=GATEWAY_REGISTRY
+)
+
+PROMPT_TOKEN_DIFFERENCE = Histogram(
+    "orch_prompt_token_difference",
+    "Gateway prompt token count minus the engine's prompt_tokens, per completed request.",
+    labelnames=["request_class"],
+    buckets=(-512, -128, -32, -8, -2, -1, 0, 1, 2, 8, 32, 128, 512, 2048),
     registry=GATEWAY_REGISTRY
 )

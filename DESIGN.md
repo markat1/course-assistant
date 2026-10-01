@@ -19,11 +19,11 @@ Diagrams: `docs/shipping-pipeline.excalidraw` (the brief's pipeline next to ours
 | Brief | Ours | Code |
 |---|---|---|
 | user / agent / retriever | every agent step, headers `X-Tenant`, `X-Request-Class` | `app/llm.py`, `app/lifespan.py:25` |
-| guardrails (never reaches a GPU) | `inspect()` -> 400, before anything else | `main.py:64`, `policies/guard.py` |
-| overflow gate (stay or leave, after the local result) | on every refusal and every non-200 engine answer | `api/chat.py:42` `record_overflow_decision`, `policies/overflow.py` |
-| should we accept it? (admit) | tenant window (429), then `admit()` (503) | `main.py:84-103` |
-| which worker? (place) | `select_worker`, `prefix_then_load` | `main.py:106`, `policies/routing.py` |
-| your queue (same pod: no hop; two ids: hop) | `record_placement` records a hop when the prefix moves worker; then the worker's priority queue | `main.py:123`, `execution/hops.py`, `execution/queueing.py` |
+| guardrails (never reaches a GPU) | `inspect()` -> 400, before anything else | `main.py:66`, `policies/guard.py` |
+| overflow gate (stay or leave, after the local result) | on every refusal and every non-200 engine answer | `api/chat.py:43` `record_overflow_decision`, `policies/overflow.py` |
+| should we accept it? (admit) | tenant window (429), then `admit()` (503) | `main.py:88-107` |
+| which worker? (place) | `select_worker`, `prefix_then_load` | `main.py:110`, `policies/routing.py` |
+| your queue (same pod: no hop; two ids: hop) | `record_placement` records a hop when the prefix moves worker; then the worker's priority queue | `main.py:127`, `execution/hops.py`, `execution/queueing.py` |
 | engine (prefill, decode, KV, waiting/running/preempt) | SGLang, unchanged, configured by flags | `cluster/workers/sglang.yaml` |
 | 429 / 500 / slice_oom stay; 503 / 529 may leave | `LEAVE_STATUSES = {503, 529}`, counted in `orch_overflow_total{decision,code}` | `policies/overflow.py` |
 
@@ -191,8 +191,9 @@ KV is still far from being the limiter.
 **Guard:** `gateway/policies/guard.py:inspect`. This is the first "no", before any queue slot
 or GPU work:
 - `bad_max_tokens` (400): `max_tokens` > `max_output_tokens` (1024).
-- `prompt_too_long` (400): estimated prompt + output > `context_length` (8192).
-  The estimate is 4 chars/token because the gateway has no tokenizer.
+- `prompt_too_long` (400): prompt + output > `context_length` (8192). The prompt
+  is counted as 4 chars/token by default, or with Qwen's tokenizer when
+  `GATEWAY_TOKEN_COUNTER=tokenizer` ("Real token counts" at the end of this part).
 
 Evidence: `orch_guard_rejected_total{reason="bad_max_tokens"}` in
 `metrics/guard-overflow-hops-2026-09-30.txt`.
@@ -256,7 +257,7 @@ never leave; batch is shed with Retry-After instead.
 **Tenant window (`tenant_tokens`):** `gateway/policies/tenant_window.py`, called
 in `gateway/main.py` after the guard and before `admit`. Each tenant (`X-Tenant`
 header, default `default`) may spend `tenant_max_tokens` (200,000) per sliding
-`tenant_window_s` (60 s). A request costs its estimated prompt tokens plus
+`tenant_window_s` (60 s). A request costs its prompt tokens (the guard's count) plus
 `max_tokens` (or `max_output_tokens` if missing). Over budget → **429**
 `tenant_tokens` with Retry-After (seconds until enough old tokens leave the
 window), counted in `orch_shed_total{reason="tenant_tokens",code="429"}` and as
@@ -298,6 +299,153 @@ the chosen worker's queue. Every 503/429 is also classified stay-or-leave. Known
 limit: `timeout_queue` is detected after the wait, not predicted before enqueue; a
 predictive check (queue depth x recent service time > deadline -> 503 before
 enqueue) is the next step.
+
+### Real token counts in the gateway, switchable (1 October)
+
+**Status: implemented and tested without a GPU; the default is unchanged.** The
+numbers below were measured on 1 October in a Codespace (2 vCPU Xeon 8370C), with
+no engine call: `experiments/token_count.py`, output in
+`metrics/token-count-2026-10-01.txt`. The A/B run on the GPU is still owed (proof
+plan, steps 2 and 3).
+
+**Problem.** The gateway had no tokenizer and estimated tokens as characters / 4
+(`CHARS_PER_TOKEN = 4`). Three decisions use the count:
+
+| Where | Code | Effect of a wrong count |
+|---|---|---|
+| Guard `prompt_too_long` | `policies/guard.py:inspect` | Under-count: the request passes, takes a queue slot, and SGLang rejects it with its own 400. Over-count: we refuse a request that would have fit. |
+| Tenant token window | `main.py:84` (`guard.prompt_tokens`, the guard's own number) | A tenant is charged more or less than it used. |
+| Hop record `tokens` | `execution/hops.py:prefix_key` (first message only) | `orch_hop_tokens_total` is an estimate, not the recomputed amount. |
+
+**Measured: the estimate over-counts our own prefix by 25 %.** Same six prompts as
+`experiments/first_token.py` (the warmup prefix + one question each), compared with
+the engine's own `usage.prompt_tokens` in `metrics/warmup-first-token-2026-09-29.txt`:
+
+| | Tokens | Difference from the engine |
+|---|---|---|
+| Engine (`prompt_tokens`) | 1,671-1,674 | - |
+| Qwen's chat template rendered locally, then tokenized | 1,671-1,674 | **0 on all six** |
+| Gateway, `tokenizer` mode (contents + template tokens) | 1,671-1,674 | **0 on all six** |
+| Qwen tokenizer on the message contents only | 1,654-1,657 | exactly 17 too few on all six |
+| Characters / 4 (`estimate` mode) | 2,085-2,088 | 413-415 too many |
+
+- The prefix is 8,307 characters and 1,648 tokens: 5.04 characters per token, not 4.
+- The 17 is the chat template: 5 tokens per message (`<|im_start|>`, the role, a
+  newline, `<|im_end|>`, a newline) and 7 for the start of the reply
+  (`<|im_start|>assistant\n` plus the empty think block that
+  `enable_thinking=false` adds). 2 x 5 + 7 = 17.
+- Because the locally rendered template reproduces the engine's number, it is the
+  reference for request shapes that have no engine measurement yet:
+
+  | Request shape | Template | `tokenizer` | `estimate` |
+  |---|---|---|---|
+  | 1-8 plain messages | 20-137 | 0 | -9 to -53 |
+  | system + user with 1-2 tools | 182-253 | 0 | -167 to -226 |
+  | tool calls and tool results (3 shapes) | 255-341 | +2 to +6 | -199 to -267 |
+
+- The estimate is wrong in both directions. It over-counts long prose by 25 %, so
+  the guard refuses prose from about 6,500 real tokens, not 8,192. It counts only
+  string `content`, so it does not see the `tools` schema or `tool_calls` at all and
+  under-counts every agent step: the tenant window charges those too little.
+
+**Decision.** Qwen's own tokenizer through the `tokenizers` library (Rust, no
+torch) is a second counter, selected by a setting. The estimate stays the default,
+so nothing changes until the switch is flipped.
+
+| Option | Verdict |
+|---|---|
+| `tokenizers` + `tokenizer.json` from `Qwen/Qwen3-8B` | **Chosen.** Small dependency, in-process, no engine call. First load 2.0 s including the download, 0.55 s from the cache. |
+| `transformers` `apply_chat_template(..., tools=...)` | Exact for every request shape, because it renders the same template as the engine, but a much heavier dependency for the gateway image. Next step if the gap measured on the GPU is too large. |
+| Ask the engine to tokenize | Rejected: the guard must run before any engine work, and it adds a network call per request. |
+| Replace the estimate outright | Rejected: no way back during a demo, and no before/after on the same GPU. |
+
+**The switch.**
+
+```text
+GATEWAY_TOKEN_COUNTER=estimate    # default: characters / 4, as before
+GATEWAY_TOKEN_COUNTER=tokenizer   # Qwen tokenizer + chat template tokens
+```
+
+- `Settings.token_counter: Literal["estimate", "tokenizer"] = "estimate"`.
+- `.env.example` sets `tokenizer`, so a new deployment starts with the real
+  count; without the variable the gateway uses the estimate.
+- `make counter COUNTER=tokenizer` edits `.env`, restarts the gateway and prints
+  the active counter, like `make slack`.
+- The active counter is exported as `orch_token_counter_info{counter="..."} 1` and
+  `make counters` saves it, so every saved scrape states which counter produced
+  its sheds.
+
+**Design.**
+
+- `gateway/policies/token_count.py`:
+  - `TokenCounter = Callable[[str], int]`, and `estimate_tokens(text)`.
+  - `build_token_counter(settings)`: returns the estimate, or loads the tokenizer
+    named by `model_name`. `tokenizers` is imported inside this function, so
+    `estimate` mode never touches the library.
+  - `count_prompt_tokens(payload, counter)`: with the estimate, exactly the old
+    number. With any other counter: every string `content`, the `tools` schemas
+    and `tool_calls` as the template renders them, plus the template tokens
+    (5 per message, 7 for the reply, 76 for the tools instructions, 4 around each
+    tool call and each tool result).
+- `inspect()` and `record_placement()` take the counter as a parameter that
+  defaults to `estimate_tokens`. **All 356 existing tests pass unchanged.**
+- The prompt is counted **once** per request: `inspect()` returns the number in
+  `Guard.prompt_tokens` and the tenant window is charged that number (before, it
+  was computed twice).
+- `gateway/lifespan.py` builds the counter once and stores it on `app.state`.
+- **If the tokenizer cannot be loaded, the gateway falls back to the estimate and
+  says so**: a warning in the log and `orch_token_counter_info{counter="estimate"}`.
+  Checked by starting the gateway with the Hugging Face hub offline.
+- The counter caches by text digest (LRU, 1,024 entries), so the shared prefix is
+  tokenized once, not on every request: 5.5 ms uncached, 0.011 ms cached.
+- A prompt above `MAX_CHARS_PER_TOKEN` (16) x `context_length` characters is not
+  tokenized; it gets the estimate, which is over the limit by construction. A
+  10 MB prompt is refused in 0.01 ms.
+- `orch_prompt_token_difference{request_class}` is a histogram of the gateway's
+  count minus the engine's `usage.prompt_tokens`, on non-streaming 200 answers
+  (`api/chat.py:observe_engine_count`).
+
+**What changed besides the code.**
+
+- `tokenizers` is in `pyproject.toml` and `uv.lock`; the gateway image builds with
+  `uv sync --locked` and loads the tokenizer inside the container.
+- In `tokenizer` mode the gateway container needs internet at startup to fetch
+  `tokenizer.json` (true on the Lambda host). Hardening, not done: fetch it in the
+  Docker build, and pin the same revision as the workers.
+- New tests only (`tests/unit/test_token_count.py`), with a fake counter and no
+  network. One test uses the real tokenizer and asserts the six engine numbers
+  above; it is skipped when the tokenizer cannot be loaded.
+  `test_missing_output_budget_counts_as_the_limit_when_checking_length` stays an
+  estimate-mode test: `"x" * 29600` is 7,401 by the estimate and 3,700 real tokens.
+
+**Proof plan.**
+
+1. Without a GPU (done, and kept as the unit test above): the tables above, and the
+   real gateway in both modes with no worker: `"x" * 29600` is refused by the
+   estimate and passes the guard with the tokenizer; 45,000 characters of prose
+   (about 8,900 tokens) is refused by both.
+2. On the GPU, same Locust mix twice, `make counter COUNTER=estimate` then
+   `COUNTER=tokenizer`: compare `orch_guard_rejected_total{reason="prompt_too_long"}`,
+   the 429 `tenant_tokens` count and `orch_hop_tokens_total`.
+3. On the GPU: read `orch_prompt_token_difference` per request class. The claim to
+   make is "the gateway's count is within N tokens of the engine's", with N
+   measured on the engine for agent turns with tools, not only for system + user.
+
+**Honest limits.**
+
+- Only system + user is confirmed against the engine. The tools and tool-call rows
+  compare with the template rendered locally, on hand-written requests, not with
+  SGLang on real agent turns. Step 3 turns that into a measured number.
+- The template tokens are constants for Qwen3 with thinking disabled. Another
+  model or `enable_thinking=true` needs new constants.
+- Streaming answers carry no `usage`, so they are not in the difference histogram.
+- Tokenizing runs in the request handler, on the event loop: 5.5 ms for the
+  prefix (once, then cached), 17 ms at 8,236 tokens, 59 ms worst case at the
+  character cap. Measured on a 2 vCPU Codespace, not on the Lambda host.
+- With the real count the guard loosens by about 25 % on prose, so more reaches the
+  engine, while agent steps with tools are charged more than before. The 76 x 429
+  and the shed counts in the saved runs were produced by the estimate and are not
+  comparable with a `tokenizer` run without saying so.
 
 ## Part 4. Place
 
@@ -512,5 +660,8 @@ Still open, in order of value:
 6. **Capacity above `--max-running-requests=8`** (e.g. 16) against a TPOT SLO.
 7. **Streaming status while tools run**: the first visible word comes after
    Router, handoff, Tutor and the lookup.
-8. `pyproject.toml` has no `notebook` dependency group; the notebook runs with
+8. **Token counter A/B on the GPU**: the same Locust mix with
+   `GATEWAY_TOKEN_COUNTER=estimate` and `tokenizer`, and the difference from the
+   engine's `prompt_tokens` for agent turns (Part 3, "Real token counts").
+9. `pyproject.toml` has no `notebook` dependency group; the notebook runs with
    `uv run --with jupyter --with matplotlib` (Part 5).

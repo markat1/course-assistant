@@ -64,3 +64,4 @@ class Settings(BaseSettings):
     tenant_max_tokens: int = Field(default=200_000, gt=0)
     tenant_window_s: float = Field(default=60.0, gt=0, allow_inf_nan=False)
     prefix_load_slack: int = Field(default=4, ge=0)
+    token_counter: Literal["estimate", "tokenizer"] = "estimate"

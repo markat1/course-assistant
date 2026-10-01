@@ -1,4 +1,5 @@
 import asyncio
+import json
 from typing import NoReturn
 
 import httpx
@@ -11,7 +12,7 @@ from gateway.models.queued_request import QueuedRequest
 from gateway.models.workers.worker_state import WorkerState
 from gateway.monitoring.metrics import SHED_TOTAL
 from gateway.execution.errors import DispatchError
-from gateway.monitoring.metrics import OVERFLOW_TOTAL
+from gateway.monitoring.metrics import OVERFLOW_TOTAL, PROMPT_TOKEN_DIFFERENCE
 from gateway.policies.overflow import stay_or_leave
 
 from fastapi.responses import StreamingResponse
@@ -59,6 +60,20 @@ def to_client_response(upstream: httpx.Response) -> Response:
         status_code=upstream.status_code,
         headers=headers,
     )
+
+def observe_engine_count(response: Response, prompt_tokens: int, request_class: str) -> None:
+    """Record how far the gateway's prompt count is from the engine's; streams carry no usage."""
+    if response.status_code != 200 or isinstance(response, StreamingResponse):
+        return
+
+    try:
+        engine_tokens = json.loads(response.body)["usage"]["prompt_tokens"]
+    except (ValueError, KeyError, TypeError):
+        return
+
+    if isinstance(engine_tokens, int):
+        PROMPT_TOKEN_DIFFERENCE.labels(request_class=request_class).observe(prompt_tokens - engine_tokens)
+
 
 async def serve_queued_chat(
         payload: ChatRequest,

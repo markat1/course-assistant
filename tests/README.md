@@ -15,7 +15,9 @@ docker run --rm -v "$PWD/monitoring:/monitoring" --entrypoint promtool \
   prom/prometheus:v3.4.1 test rules /monitoring/tests/alerts_test.yaml
 ```
 
-All current pytest tests run locally without Docker, network access or a GPU. Integration
+All current pytest tests run locally without Docker, network access or a GPU; one
+test in `unit/test_token_count.py` compares Qwen's real tokenizer with the engine's
+recorded counts and is skipped when the tokenizer cannot be loaded. Integration
 tests connect gateway components in process; HTTPX transports simulate the worker
 boundary. Passing these tests does not establish real worker readiness, GPU memory
 release, streaming latency or client-disconnect behavior.

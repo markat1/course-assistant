@@ -3,25 +3,29 @@ import logging
 
 from gateway.models.chat.chat_request import ChatRequest
 from gateway.monitoring.metrics import HOP_EVICTIONS_TOTAL, HOP_TOKENS_TOTAL, HOP_TOTAL
-from gateway.policies.guard import CHARS_PER_TOKEN
 from gateway.policies.hop_ledger import Hop, HopLedger
+from gateway.policies.token_count import TokenCounter, estimate_tokens
 
 logger = logging.getLogger(__name__)
 
 HOP_LEDGER = HopLedger()
 
 
-def prefix_key(payload: ChatRequest) -> tuple[str, int]:
-    """Hash of the first message (system prompt / tool schema) and its rough token count."""
+def prefix_key(payload: ChatRequest, counter: TokenCounter = estimate_tokens) -> tuple[str, int]:
+    """Hash of the first message (system prompt / tool schema) and its token count."""
     first = payload.messages[0].content
     text = first if isinstance(first, str) else str(first)
     digest = hashlib.sha256(text.encode()).hexdigest()[:16]
-    return digest, len(text) // CHARS_PER_TOKEN + 1
+    return digest, counter(text)
 
 
-def record_placement(payload: ChatRequest, worker_id: str) -> Hop | None:
+def record_placement(
+        payload: ChatRequest,
+        worker_id: str,
+        counter: TokenCounter = estimate_tokens,
+) -> Hop | None:
     """Record where a prefix was placed and count a hop when it moved worker."""
-    prefix, tokens = prefix_key(payload)
+    prefix, tokens = prefix_key(payload, counter)
     evicted_before = HOP_LEDGER.evictions
     hop = HOP_LEDGER.record(prefix, worker_id, tokens=tokens)
     HOP_EVICTIONS_TOTAL.labels(cause="capacity").inc(HOP_LEDGER.evictions - evicted_before)

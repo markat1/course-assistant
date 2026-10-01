@@ -1,0 +1,59 @@
+# Gateway token count vs Qwen's chat template - 1 October 2026
+# Host: GitHub Codespace, Intel Xeon Platinum 8370C, 2 vCPU. No GPU, no engine call.
+#
+# Method: experiments/token_count.py. "engine" is usage.prompt_tokens for the same
+# six prompts in metrics/warmup-first-token-2026-09-29.txt (H100, SGLang v0.5.20).
+# "template" renders Qwen/Qwen3-8B's chat_template (tokenizer_config.json) with
+# jinja2, add_generation_prompt=True and enable_thinking=False (the workers'
+# setting), and tokenizes the result. "tokenizer" is the gateway's
+# count_prompt_tokens with GATEWAY_TOKEN_COUNTER=tokenizer; "estimate" is the same
+# function with the default counter (characters / 4).
+#
+# The template reproduces the engine's count on all six prompts, so it is used as
+# the reference for the request shapes that have no engine measurement yet. Those
+# rows are template-vs-gateway, NOT engine-vs-gateway; the GPU run is still owed.
+
+$ uv run --with jinja2 python -m experiments.token_count
+model=Qwen/Qwen3-8B tokenizer_load_s=0.55
+
+prefix chars=8307 tokens=1648 chars_per_token=5.04
+
+# the six first_token.py prompts: engine vs template vs gateway
+engine=1673 template=1673 tokenizer=1673 contents_only=1656 estimate=2088
+engine=1671 template=1671 tokenizer=1671 contents_only=1654 estimate=2085
+engine=1672 template=1672 tokenizer=1672 contents_only=1655 estimate=2085
+engine=1673 template=1673 tokenizer=1673 contents_only=1656 estimate=2086
+engine=1674 template=1674 tokenizer=1674 contents_only=1657 estimate=2088
+engine=1674 template=1674 tokenizer=1674 contents_only=1657 estimate=2087
+
+# request shapes: template (what the engine tokenizes) vs gateway
+user only                            template=  20 tokenizer=  20 difference=+0 estimate=  11 difference=-9
+system + user                        template=  37 tokenizer=  37 difference=+0 estimate=  27 difference=-10
+4 messages                           template=  69 tokenizer=  69 difference=+0 estimate=  40 difference=-29
+8 messages                           template= 137 tokenizer= 137 difference=+0 estimate=  84 difference=-53
+system + user, 1 tool                template= 194 tokenizer= 194 difference=+0 estimate=  27 difference=-167
+system + user, 2 tools               template= 253 tokenizer= 253 difference=+0 estimate=  27 difference=-226
+user only, 1 tool                    template= 182 tokenizer= 182 difference=+0 estimate=  11 difference=-171
+1 tool call + result                 template= 255 tokenizer= 257 difference=+2 estimate=  56 difference=-199
+2 tool calls + 2 results             template= 290 tokenizer= 296 difference=+6 estimate=  64 difference=-226
+call, result, answer, next question  template= 341 tokenizer= 343 difference=+2 estimate=  74 difference=-267
+
+# tokenizing time, median of 20, uncached
+prefix tokens=1648 ms=5.50
+long tokens=8236 ms=17.01
+prefix through the gateway counter (cached) ms=0.011
+
+## Summary
+# - System + user, 6/6: engine = template = gateway tokenizer count (1,671-1,674).
+#   Message contents alone are 17 short: 5 template tokens per message + 7 for the
+#   reply start (<|im_start|>assistant\n plus the empty think block).
+# - Plain conversations of 1-8 messages: difference 0.
+# - Tools in the request: difference 0. The estimate does not see the schema at all
+#   and under-counts these requests by 167-226 tokens.
+# - Tool calls and tool results: +2 to +6 (over-count, the safe side); adjacent
+#   tool results share one wrapper in the template and the gateway counts one each.
+# - The estimate over-counts the long prose prefix by 413-415 (25 %) and under-counts
+#   every short or tool-carrying request here.
+# - Tokenizing: 1,648-token prefix 5.5 ms, 8,236 tokens 17 ms (median of 20, this
+#   CPU); the cached prefix costs 0.011 ms. Tokenizer load 0.55 s with the file
+#   already downloaded (2.0 s on the first run, including the download).

@@ -13,7 +13,7 @@ from gateway.models.workers.worker_state import WorkerState
 from gateway.policies.tenant_window import TenantWindow
 
 CHAT_URL = "/v1/chat/completions"
-# estimate_prompt_tokens("Hello") = 5 // 4 + 1 = 2, so each request costs 2 + max_tokens.
+# estimate_tokens("Hello") = 5 // 4 + 1 = 2, so each request costs 2 + max_tokens.
 HELLO = [{"role": "user", "content": "Hello"}]
 
 
@@ -153,3 +153,29 @@ async def test_tenant_rejection_is_counted_as_a_shed_that_stays(gateway):
     assert delta(before, after, ("orch_overflow_total", (("code", "429"), ("decision", "stay")))) == 1
     assert delta(before, after, ("orch_overflow_total", (("code", "429"), ("decision", "leave_disabled")))) == 0
     assert delta(before, after, ("orch_place_total", (("worker", "worker-a"),))) == 0
+
+
+@pytest.mark.asyncio
+async def test_tenant_is_charged_the_count_the_guard_decided_on(gateway, monkeypatch):
+    counted = []
+
+    def one_token_per_word(text):
+        counted.append(text)
+        return len(text.split())
+
+    monkeypatch.setattr(app.state, "token_counter", one_token_per_word, raising=False)
+    monkeypatch.setattr(
+        app.state, "tenant_window", TenantWindow(max_tokens=1000, window_s=60.0), raising=False,
+    )
+
+    def body(max_tokens):
+        messages = [{"role": "system", "content": "Tutor"}, *HELLO]
+        return {"model": "test-model", "messages": messages, "max_tokens": max_tokens}
+
+    # 2 words + 5 template tokens per message + 7 for the reply = 19 prompt tokens.
+    first = await gateway.client.post(CHAT_URL, json=body(481), headers={"X-Tenant": "alice"})
+    second = await gateway.client.post(CHAT_URL, json=body(481), headers={"X-Tenant": "alice"})
+    third = await gateway.client.post(CHAT_URL, json=body(1), headers={"X-Tenant": "alice"})
+
+    assert (first.status_code, second.status_code, third.status_code) == (200, 200, 429)
+    assert counted.count("Hello") == 3
