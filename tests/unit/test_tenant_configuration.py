@@ -48,3 +48,24 @@ def test_prefix_load_slack_is_configurable_and_not_negative(settings_values, mon
 
     with pytest.raises(ValidationError):
         Settings(**settings_values, prefix_load_slack=-1)
+
+
+def test_batch_has_its_own_longer_queue_deadline_and_a_share_of_the_queue(settings_values, monkeypatch):
+    defaults = Settings(**settings_values)
+
+    assert defaults.queue_timeout_s == 5.0
+    assert defaults.batch_queue_timeout_s == 30.0
+    assert defaults.batch_queue_max_size == 8
+
+    monkeypatch.setenv("GATEWAY_BATCH_QUEUE_TIMEOUT_S", "45")
+    monkeypatch.setenv("GATEWAY_BATCH_QUEUE_MAX_SIZE", "4")
+    configured = Settings(**settings_values)
+
+    assert configured.batch_queue_timeout_s == 45.0
+    assert configured.batch_queue_max_size == 4
+
+
+@pytest.mark.parametrize("name", ["batch_queue_timeout_s", "batch_queue_max_size"])
+def test_invalid_batch_queue_setting_fails_before_startup(settings_values, name):
+    with pytest.raises(ValidationError):
+        Settings(**settings_values, **{name: 0})
