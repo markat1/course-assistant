@@ -34,7 +34,7 @@ Prometheus scrapes gateway + both engines -> Grafana dashboards + 4 alert rules
 | Part | What we built | Where | Proof |
 |---|---|---|---|
 | **0 App** | Track B agent: Router hands off to Tutor, Tutor calls `lookup_course` over a small course corpus and cites sources; OpenAI-compatible API with streaming; shared tokens = system prompt + tool schema, unique = the question | `app/` | Answer cites "KV memory and concurrency capacity"; streams in Open WebUI |
-| **1 Capacity** | KV = 2 x 36 layers x 8 KV heads x 128 x 2 B = **144 KiB/token**; measured **115,299 tokens** per 38,000 MiB slice = ~14 seqs at 8,192, ~57 at a ~2,000-token turn. Hypothesis "the scheduler cap binds before KV": confirmed, and the very first limiter was our own gateway cap (2) | `DESIGN.md` Part 1 | SGLang startup log; KV peak 1.6 % under load |
+| **1 Capacity** | KV = 2 x 36 layers x 8 KV heads x 128 x 2 B = **144 KiB/token**; measured **115,299 tokens** per 38,000 MiB slice = ~14 seqs at 8,192, ~57 at a ~2,000-token turn. Hypothesis "the scheduler cap binds before KV": confirmed, and the very first limiter was our own gateway cap (2) | `DESIGN.md` Part 1 | SGLang startup log; KV peak 8.8 % under load |
 | **2 Cluster** | 80 GB GPU (cheapest single GPU for two 8B BF16 replicas); 2 colocated replicas, HAMi slices; `--max-running-requests 8`, `--context-length 8192`, `--chunked-prefill-size 2048`; hop backend **recompute** (no Mooncake); overflow **Qwen3-8B on one owned 24 GB GPU** (decided, forwarding not wired); gateway and engine are two boxes | `cluster/`, `compose*.yaml` | HAMi limit: 30,000 MiB pod sees 29.3 GiB |
 | **3 Guard, admit, stay/leave** | `inspect()` guard (400), tenant token window (429 `tenant_tokens`), admission on readiness + fresh metrics + KV < 0.90 (503), queue_full (503), timeout_queue (504); `stay_or_leave`: 429/500 stay, 503/529 may leave; Retry-After on capacity sheds; prompt tokens counted as characters / 4 or, with `GATEWAY_TOKEN_COUNTER=tokenizer`, by Qwen's tokenizer (off by default, GPU A/B owed) | `gateway/policies/` | 76 x 429 only on tenant `revision-batch`; all 429/504 "stay"; tokenizer count = engine `prompt_tokens` on 6/6 prompts (`metrics/token-count-2026-10-01.txt`) |
 | **4 Place** | `pick` = `select_worker`: least-loaded on queue + in-flight + engine waiting (queue depth is a scorer), random tie-break, **prefix_then_load** (slack 4), ramp penalty; p2c equals least-loaded with two workers | `gateway/policies/routing.py` | Herding 5:1 -> even; hops 399 (old) -> 2 |
@@ -56,7 +56,7 @@ Prometheus scrapes gateway + both engines -> Grafana dashboards + 4 alert rules
 | 7 | Where do I hop, and what is not copied? | When a prefix lands on a worker that does not hold it; backend "recompute": no KV bytes move, the destination recomputes the prefix | `gateway/policies/hop_ledger.py`; 2 hops |
 | 8 | Where do I evict; what becomes a ghost? | `forget_worker` when a worker is lost; otherwise the gateway would route to a "warm" prefix on a restarted, empty worker | `orch_hop_evictions_total` |
 | 9 | Engine scheduler vs my admit/place/queue? | We decide what enters and where; SGLang decides batching, chunked prefill, KV allocation and retraction inside the batch | DESIGN Part 2 "two boxes"; notebook |
-| 10 | What limited concurrency on this GPU? | First our gateway cap (2): 3.3x faster at 8; then the engine cap 8; KV never above 1.6 % | `metrics/load-gateway-2026-09-29.txt` |
+| 10 | What limited concurrency on this GPU? | First our gateway cap (2): 3.3x faster at 8; then the engine cap 8; KV never above 8.8 % | `metrics/load-gateway-2026-09-29.txt`, `metrics/locust-labelled-a100-2026-09-30.txt` |
 | 11 | Four production alerts? | KvCachePressure, TtftSloBreach, HighShedRate, WorkerDown | `monitoring/alerts.yaml` (+ promtool tests) |
 | 12 | If I scale, which pool? | Decode slots (prefill is mostly cached): raise the engine running cap while TPOT holds, then more GPU compute - not another replica on the same GPU | DESIGN Part 8 |
 | 13 | 10x traffic; three wrong knobs? | Tenant windows + priority + overflow for 503 only + more compute; wrong: bigger queues/timeouts, KV limit toward 1.0, more replicas on the same GPU | DESIGN Part 8 |
@@ -66,7 +66,7 @@ Prometheus scrapes gateway + both engines -> Grafana dashboards + 4 alert rules
 | Bad answer in the brief | Our position |
 |---|---|
 | Bench latency at batch 8 as the production SLO | SLOs from the app's own mix (Locust Class 7 shares) through the serve path |
-| Cache full, so add a replica of the same size | KV peaked at 1.6 %; the limiter was concurrency caps, not KV |
+| Cache full, so add a replica of the same size | KV peaked at 8.8 %; the limiter was concurrency caps, not KV |
 | NCCL/NIXL in the repo moves KV | Hop backend is "recompute"; we state that nothing is copied |
 | Ready when the weights are on the GPU | Ready = health + model + 5 validated warmup completions + fresh metrics |
 | Overflow is "another API" with no model or limiter | Named model (Qwen3-8B, owned 24 GB GPU) and limiter (its KV pool) |

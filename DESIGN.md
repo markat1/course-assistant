@@ -13,7 +13,8 @@ are valid on both; **latencies are only compared within the same GPU**.
 
 Diagrams: `docs/shipping-pipeline.excalidraw` (the brief's pipeline next to ours),
 `docs/architecture.excalidraw` (the whole cluster), `docs/agent-turn.excalidraw`
-(one question as three calls to the gateway).
+(one question as three calls to the gateway), `docs/capacity.excalidraw` (the Part 1
+calculation step by step).
 
 **The brief's pipeline, mapped to `gateway/main.py:chat_completions`:**
 
