@@ -23,7 +23,7 @@ Prometheus scrapes gateway + both engines -> Grafana dashboards + 4 alert rules
 
 | Condition | Met | Evidence |
 |---|---|---|
-| Real NVIDIA GPU (no fake GPU) | Lambda H100 80GB SXM5 (29 Sep), A100 80GB (30 Sep) | `metrics/h100-sxm5-*`, `metrics/*a100*` |
+| Real NVIDIA GPU | Lambda H100 80GB SXM5 (29 Sep), A100 80GB (30 Sep) | `metrics/h100-sxm5-*`, `metrics/*a100*` |
 | At least two workers | 2 SGLang replicas, HAMi memory slices | `metrics/h100-sxm5-hami-workers-2026-09-29.txt` |
 | Live `/metrics` scrape | Prometheus: gateway, worker-a, worker-b all `up` | same file §10; notebook cell 0 |
 | Hop-or-warmup proof | cold vs warm first token, before/after gateway warmup; recompute hops counted | `metrics/warmup-first-token-2026-09-29.txt`, `metrics/locust-labelled-a100-2026-09-30.txt` |
