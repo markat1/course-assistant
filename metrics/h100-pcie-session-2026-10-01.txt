@@ -1,0 +1,61 @@
+# GPU session, 1 October 2026 - Lambda 1x H100 PCIe 80GB
+# Release ebf80f5 (tokenizer counter, batch queue deadline). Same HAMi slices
+# (nvidia.com/gpumem 38000) and engine flags as the earlier sessions.
+# Raw output pasted by the user.
+
+$ nvidia-smi --query-gpu=name,memory.total --format=csv
+name, memory.total [MiB]
+NVIDIA H100 PCIe, 81559 MiB
+
+$ bash setup/deploy_workers.sh
+partitioned roll out complete: 2 new pods have been updated...
+NAME       READY   STATUS    RESTARTS   AGE     IP           NODE
+sglang-0   1/1     Running   0          4m57s   10.42.0.10   209-20-157-15
+sglang-1   1/1     Running   0          2m4s    10.42.0.11   209-20-157-15
+
+## Bring-up check (16:32 UTC)
+$ make check
+sglang-0   1/1     Running   0          7m18s
+sglang-1   1/1     Running   0          4m25s
+[2026-10-01 16:26:58] Load weight end. elapsed=28.05 s, type=Qwen3ForCausalLM, avail mem=21.39 GB, mem usage=15.28 GB.
+[2026-10-01 16:27:51] max_total_num_tokens=115710, chunked_prefill_size=2048, max_prefill_tokens=16384, max_running_requests=8, context_len=8192, available_gpu_mem=5.08 GB
+gateway - up
+prometheus - up
+sglang worker-a up
+sglang worker-b up
+"name":"HighShedRate"
+"name":"KvCachePressure"
+"name":"TtftSloBreach"
+"name":"WorkerDown"
+
+# KV pool per worker on the same 38,000 MiB slice:
+#   H100 SXM5 (29 Sep) 115,299   A100 80GB (30 Sep) 115,916   H100 PCIe (1 Oct) 115,710
+# Weights 15.28 GB. The capacity table in DESIGN.md Part 1 holds on all three cards.
+
+## Token counter at startup (.env from .env.example: GATEWAY_TOKEN_COUNTER=tokenizer)
+$ make counters
+orch_hop_tokens_total 0.0
+orch_token_counter_info{counter="tokenizer"} 1.0
+# The gateway loaded Qwen's tokenizer at startup (no fallback to the estimate).
+
+## Guard: the first no, before any GPU work
+$ curl -s localhost:8780/v1/chat/completions -H 'Content-Type: application/json' -d '{"model":"Qwen/Qwen3-8B","messages":[{"role":"user","content":"hi"}],"max_tokens":5000}'; echo
+{"detail":"bad_max_tokens"}
+
+## Same prompt, two token counters (29,600 characters, no max_tokens -> output budget 1,024)
+# characters / 4: 7,401 + 1,024 > 8,192 -> refused.  Qwen tokenizer: 3,700 + 1,024 fits.
+
+# GATEWAY_TOKEN_COUNTER=tokenizer (active at startup)
+$ python3 -c 'import json;print(json.dumps({"model":"Qwen/Qwen3-8B","messages":[{"role":"user","content":"x"*29600}]}))' | curl -s -o /dev/null -w "%{http_code}\n" localhost:8780/v1/chat/completions -H 'Content-Type: application/json' -d @-
+200
+
+$ make counter COUNTER=estimate
+ ✔ Container course-assistant-gateway-1 Started                                                     1.2s
+orch_token_counter_info{counter="estimate"} 1.0
+
+# GATEWAY_TOKEN_COUNTER=estimate
+$ (same command)
+400
+
+# The estimate refuses a request the engine serves; the tokenizer lets it through.
+# This is the GPU confirmation of proof-plan step 1 in DESIGN.md Part 3.
