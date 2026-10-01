@@ -123,6 +123,13 @@ async def chat_completions(chat_request: ChatRequest, request: Request):
             retry_after_s=settings.capacity_retry_after_s,
         )
 
+    if request_class == "batch" and worker.gateway_queue_depth >= settings.batch_queue_max_size:
+        reject_before_dispatch(
+            "queue_full",
+            503,
+            retry_after_s=settings.capacity_retry_after_s
+        )
+    
     PLACE_TOTAL.labels(worker=worker.id).inc()
     record_placement(chat_request, worker.id, counter)
 
@@ -130,7 +137,7 @@ async def chat_completions(chat_request: ChatRequest, request: Request):
         chat_request,
         worker,
         request.app.state.queues[worker.id],
-        timeout_s=settings.queue_timeout_s,
+        timeout_s=settings.batch_queue_timeout_s if request_class == "batch" else settings.queue_timeout_s,
         capacity_retry_after_s=settings.capacity_retry_after_s,
         priority=priority,
     )

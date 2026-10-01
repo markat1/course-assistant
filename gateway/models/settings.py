@@ -43,6 +43,13 @@ class Settings(BaseSettings):
         gt=0,
         allow_inf_nan=False
     )
+    batch_queue_timeout_s: float = Field(
+        default=30.0,
+        gt=0,
+        allow_inf_nan=False
+    )
+    batch_queue_max_size: int = Field(default=8, gt=0)
+
     context_length: int = Field(default=8192, gt=0)
     max_output_tokens: int = Field(default=1024, gt=0)
     capacity_retry_after_s: int = Field(default=2, gt=0)
